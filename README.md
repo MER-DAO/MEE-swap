@@ -1,2 +1,2 @@
-# ETF-swap
-Core contracts for ETF Swap
+# MEE-swap
+Core contracts for MEE Swap
