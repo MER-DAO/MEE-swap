@@ -10,8 +10,8 @@ interface IMFactory {
 }
 
 interface IMining {
-    function addLiquidity(bool isGp, address _user, uint256 _amount) public;
-    function removeLiquidity(bool isGp, address _user, uint256 _amount) public;
+    function addLiquidity(bool isGp, address _user, uint256 _amount) external;
+    function removeLiquidity(bool isGp, address _user, uint256 _amount) external;
     function claimLiquidityShares(address user, address[] calldata tokens, uint256[] calldata balances, uint256[] calldata weights, uint256 amount, bool _add) external;
     function claimSwapShare(address user, address tokenIn, uint256 amountIn, address tokenOut, uint256 amountOut) external;
     function updateGPInfo(address[] calldata gps, uint256[] calldata amounts) external;
