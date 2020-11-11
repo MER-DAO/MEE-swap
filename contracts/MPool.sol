@@ -3,13 +3,13 @@ pragma solidity 0.5.12;
 import "./MToken.sol";
 import "./MMath.sol";
 
-contract IMFactory {
+interface IMFactory {
     function isWhiteList(address w) external view returns (bool);
     function getMining() external returns (address lpMiningAdr, address swapMiningAdr);
     function getFeeTo() external view returns (address);
 }
 
-contract IMining {
+interface IMining {
     function addLiquidity(bool isGp, address _user, uint256 _amount) public;
     function removeLiquidity(bool isGp, address _user, uint256 _amount) public;
     function claimLiquidityShares(address user, address[] calldata tokens, uint256[] calldata balances, uint256[] calldata weights, uint256 amount, bool _add) external;
