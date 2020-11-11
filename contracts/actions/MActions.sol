@@ -21,7 +21,7 @@ interface IERC20 {
     function transferFrom(address sender, address recipient, uint amount) external returns (bool);
 }
 
-interface IMPool is IERC20 {
+interface IMPool {
     function isBound(address t) external view returns (bool);
     function getFinalTokens() external view returns(address[] memory);
     function getBalance(address token) external view returns (uint);
@@ -36,7 +36,7 @@ interface IMPool is IERC20 {
 }
 
 interface IPairToken {
-    function setController(address _controller) public ;
+    function setController(address _controller) external ;
 }
 
 interface IMFactory {
@@ -99,7 +99,7 @@ contract MActions {
         pool.setSwapFee(swapFee);
 
         for (uint i = 0; i < tokens.length; i++) {
-            IERC20 token = ERC20(tokens[i]);
+            IERC20 token = IERC20(tokens[i]);
             require(token.transferFrom(msg.sender, address(this), balances[i]), "ERR_TRANSFER_FAILED");
             if (token.allowance(address(this), address(pool)) > 0) {
                 token.approve(address(pool), 0);
@@ -123,7 +123,7 @@ contract MActions {
         require(maxAmountsIn.length == tokens.length, "ERR_LENGTH_MISMATCH");
 
         for (uint i = 0; i < tokens.length; i++) {
-            IERC20 token = ERC20(tokens[i]);
+            IERC20 token = IERC20(tokens[i]);
             require(token.transferFrom(msg.sender, address(this), maxAmountsIn[i]), "ERR_TRANSFER_FAILED");
             if (token.allowance(address(this), address(pool)) > 0) {
                 token.approve(address(pool), 0);
@@ -133,7 +133,7 @@ contract MActions {
 
         pool.joinPool(msg.sender, poolAmountOut, maxAmountsIn);
         for (uint i = 0; i < tokens.length; i++) {
-            IERC20 token = ERC20(tokens[i]);
+            IERC20 token = IERC20(tokens[i]);
             if (token.balanceOf(address(this)) > 0) {
                 require(token.transfer(msg.sender, token.balanceOf(address(this))), "ERR_TRANSFER_FAILED");
             }
@@ -146,7 +146,7 @@ contract MActions {
         uint tokenAmountIn,
         uint minPoolAmountOut
     ) external {
-        IERC20 token = ERC20(tokenIn);
+        IERC20 token = IERC20(tokenIn);
         require(token.transferFrom(msg.sender, address(this), tokenAmountIn), "ERR_TRANSFER_FAILED");
         if (token.allowance(address(this), address(pool)) > 0) {
             token.approve(address(pool), 0);
