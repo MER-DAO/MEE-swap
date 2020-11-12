@@ -106,19 +106,19 @@ contract PairToken is PairERC20 {
         _mint(pairReward);
 
         uint256 lpPairReward;
-        if (_gpRate == 0){
+        if (_gpRate == 0) {
             lpPairReward = pairReward;
         } else {
             uint256 gpReward = pairReward.mul(_gpRate).div(100);
             _poolAccPairGpPerShare = _poolAccPairGpPerShare.add(gpReward.mul(1e12).div(_totalGpSupply));
-            lpPairReward = pairReward.mul(100 - _gpRate).div(100);
+            lpPairReward = pairReward.sub(gpReward);
         }
 
         _poolAccPairPerShare = _poolAccPairPerShare.add(lpPairReward.mul(1e12).div(_totalLpSupply));
     }
 
     // add liquidity LP tokens to PairBar for Pair allocation.
-    function addLiquidity(bool isGp, address _user, uint256 _amount) public {
+    function addLiquidity(bool isGp, address _user, uint256 _amount) external {
         require(msg.sender == address(_pool), "ERR_POOL_ONLY");
         _addLiquidity(isGp, _user, _amount);
     }
@@ -131,7 +131,6 @@ contract PairToken is PairERC20 {
         updatePool();
 
         uint256 accPerShare = isGp ? _poolAccPairGpPerShare: _poolAccPairPerShare ;
-
         if (user.amount > 0) {
             uint256 pending = user.amount.mul(accPerShare).div(1e12).sub(user.rewardDebt);
             if (pending > 0) {
@@ -141,7 +140,11 @@ contract PairToken is PairERC20 {
 
         if (_amount > 0) {
             user.amount = user.amount.add(_amount);
-            _totalLpSupply += _amount;
+            if (isGp) {
+                _totalGpSupply += _amount;
+            } else {
+                _totalLpSupply += _amount;
+            }
             emit Deposit(isGp, _user, _amount);
         }
         user.rewardDebt = user.amount.mul(accPerShare).div(1e12);
@@ -166,7 +169,7 @@ contract PairToken is PairERC20 {
     }
 
     // remove liquidity LP tokens from PairBar.
-    function removeLiquidity(bool isGp, address _user, uint256 _amount) public {
+    function removeLiquidity(bool isGp, address _user, uint256 _amount) external {
         require(msg.sender == address(_pool), "ERR_POOL_ONLY");
         _removeLiquidity(isGp, _user, _amount);
     }
@@ -178,13 +181,15 @@ contract PairToken is PairERC20 {
         updatePool();
 
         uint256 accPerShare = isGp ? _poolAccPairGpPerShare : _poolAccPairPerShare;
+        uint256 totalSupply = isGp ? _totalGpSupply: _totalLpSupply ;
+
         uint256 pending = user.amount.mul(accPerShare).div(1e12).sub(user.rewardDebt);
         if (pending > 0) {
             _move(address(this), _user, pending);
         }
         if (_amount > 0) {
             user.amount = user.amount.sub(_amount);
-            _totalLpSupply -= _amount;
+            totalSupply -= _amount;
             emit Withdraw(isGp, _user, _amount);
         }
         user.rewardDebt = user.amount.mul(accPerShare).div(1e12);
