@@ -1,6 +1,6 @@
 pragma solidity 0.5.12;
 
-import '../interfaces/IERC20.sol';
+import './IERC20.sol';
 
 contract IMPool is IERC20 {
     function isBound(address t) external view returns (bool);
