@@ -137,4 +137,45 @@ contract MToken is MTokenBase, IERC20 {
         }
         return true;
     }
+
+    function safeTransfer(IERC20 token, address to , uint256 amount) internal {
+        bytes memory data = abi.encodeWithSelector(token.transfer.selector, to, amount);
+        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
+        if (returndata.length > 0) {
+            require(abi.decode(returndata, (bool)), "not succeed");
+        }
+    }
+
+    function safeTransferFrom(IERC20 token, address from, address to , uint256 amount) internal {
+        bytes memory data = abi.encodeWithSelector(token.transferFrom.selector, from, to, amount);
+        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
+        if (returndata.length > 0) {
+            require(abi.decode(returndata, (bool)), "not succeed");
+        }
+    }
+
+    function functionCall(address target, bytes memory data, string memory errorMessage) internal returns (bytes memory) {
+        return _functionCallWithValue(target, data, errorMessage);
+    }
+
+    function _functionCallWithValue(address target, bytes memory data, string memory errorMessage) internal returns (bytes memory) {
+        (bool success, bytes memory returndata) = target.call(data);// value: weiValue }(data);
+        if (success) {
+            return returndata;
+        } else {
+            // Look for revert reason and bubble it up if present
+            if (returndata.length > 0) {
+                // The easiest way to bubble the revert reason is using memory via assembly
+
+                // solhint-disable-next-line no-inline-assembly
+                assembly {
+                    let returndata_size := mload(returndata)
+                    revert(add(32, returndata), returndata_size)
+                }
+            } else {
+                revert(errorMessage);
+            }
+        }
+    }
+
 }

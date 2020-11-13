@@ -23,7 +23,6 @@ contract MConst is MBronze {
 
     uint internal constant MIN_FEE           = BONE / 10**6;
     uint internal constant MAX_FEE           = BONE / 10;
-    uint internal constant EXIT_FEE          = 0;
 
     uint internal constant MIN_WEIGHT        = BONE;
     uint internal constant MAX_WEIGHT        = BONE * 50;

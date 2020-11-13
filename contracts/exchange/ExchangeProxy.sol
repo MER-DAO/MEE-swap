@@ -353,9 +353,9 @@ contract ExchangeProxy is Ownable {
             PoolInterface pool = PoolInterface(swap.pool);
 
             if (SwapTokenIn.allowance(address(this), swap.pool) > 0) {
-                SwapTokenIn.approve(swap.pool, 0);
+                safeApprove(SwapTokenIn, swap.pool, 0);
             }
-            SwapTokenIn.approve(swap.pool, swap.swapAmount);
+            safeApprove(SwapTokenIn, swap.pool, swap.swapAmount);
 
             (uint tokenAmountOut,) = pool.swapExactAmountIn(
                 msg.sender,
@@ -391,9 +391,9 @@ contract ExchangeProxy is Ownable {
             PoolInterface pool = PoolInterface(swap.pool);
 
             if (SwapTokenIn.allowance(address(this), swap.pool) > 0) {
-                SwapTokenIn.approve(swap.pool, 0);
+                safeApprove(SwapTokenIn, swap.pool, 0);
             }
-            SwapTokenIn.approve(swap.pool, swap.limitReturnAmount);
+            safeApprove(SwapTokenIn, swap.pool, swap.limitReturnAmount);
 
             (uint tokenAmountIn,) = pool.swapExactAmountOut(
                 msg.sender,
@@ -438,9 +438,10 @@ contract ExchangeProxy is Ownable {
 
                 PoolInterface pool = PoolInterface(swap.pool);
                 if (SwapTokenIn.allowance(address(this), swap.pool) > 0) {
-                    SwapTokenIn.approve(swap.pool, 0);
+                    safeApprove(SwapTokenIn, swap.pool, 0);
                 }
-                SwapTokenIn.approve(swap.pool, swap.swapAmount);
+                safeApprove(SwapTokenIn, swap.pool, swap.swapAmount);
+
                 (tokenAmountOut,) = pool.swapExactAmountIn(
                     msg.sender,
                     swap.tokenIn,
@@ -482,9 +483,9 @@ contract ExchangeProxy is Ownable {
 
                 PoolInterface pool = PoolInterface(swap.pool);
                 if (SwapTokenIn.allowance(address(this), swap.pool) > 0) {
-                    SwapTokenIn.approve(swap.pool, 0);
+                    safeApprove(SwapTokenIn, swap.pool, 0);
                 }
-                SwapTokenIn.approve(swap.pool, swap.limitReturnAmount);
+                safeApprove(SwapTokenIn, swap.pool, swap.limitReturnAmount);
 
                 (tokenAmountInFirstSwap,) = pool.swapExactAmountOut(
                     msg.sender,
@@ -515,7 +516,7 @@ contract ExchangeProxy is Ownable {
                 TokenInterface FirstSwapTokenIn = TokenInterface(firstSwap.tokenIn);
                 PoolInterface poolFirstSwap = PoolInterface(firstSwap.pool);
                 if (FirstSwapTokenIn.allowance(address(this), firstSwap.pool) < uint(-1)) {
-                    FirstSwapTokenIn.approve(firstSwap.pool, uint(-1));
+                    safeApprove(FirstSwapTokenIn, firstSwap.pool, uint(-1));
                 }
 
                 (tokenAmountInFirstSwap,) = poolFirstSwap.swapExactAmountOut(
@@ -530,7 +531,7 @@ contract ExchangeProxy is Ownable {
                 //// Buy the final amount of token C desired
                 TokenInterface SecondSwapTokenIn = TokenInterface(secondSwap.tokenIn);
                 if (SecondSwapTokenIn.allowance(address(this), secondSwap.pool) < uint(-1)) {
-                    SecondSwapTokenIn.approve(secondSwap.pool, uint(-1));
+                    safeApprove(SecondSwapTokenIn, secondSwap.pool, uint(-1));
                 }
 
                 poolSecondSwap.swapExactAmountOut(
@@ -557,7 +558,8 @@ contract ExchangeProxy is Ownable {
         if (isETH(token)) {
             weth.deposit.value(msg.value)();
         } else {
-            require(token.transferFrom(msg.sender, address(this), amount), "ERR_TRANSFER_FAILED");
+//            require(token.transferFrom(msg.sender, address(this), amount), "ERR_TRANSFER_FAILED");
+            safeTransferFrom(token, msg.sender, address(this), amount);
         }
     }
 
@@ -579,12 +581,61 @@ contract ExchangeProxy is Ownable {
             (bool xfer,) = msg.sender.call.value(amount)("");
             require(xfer, "ERR_ETH_FAILED");
         } else {
-            require(token.transfer(msg.sender, amount), "ERR_TRANSFER_FAILED");
+//            require(token.transfer(msg.sender, amount), "ERR_TRANSFER_FAILED");
+            safeTransfer(token, msg.sender, amount);
         }
     }
 
     function isETH(TokenInterface token) internal pure returns(bool) {
         return (address(token) == ETH_ADDRESS);
+    }
+
+    function safeTransfer(TokenInterface token, address to , uint256 amount) internal {
+        bytes memory data = abi.encodeWithSelector(token.transfer.selector, to, amount);
+        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
+        if (returndata.length > 0) {
+            require(abi.decode(returndata, (bool)), "not succeed");
+        }
+    }
+
+    function safeTransferFrom(TokenInterface token, address from, address to , uint256 amount) internal {
+        bytes memory data = abi.encodeWithSelector(token.transferFrom.selector, from, to, amount);
+        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
+        if (returndata.length > 0) {
+            require(abi.decode(returndata, (bool)), "not succeed");
+        }
+    }
+
+    function safeApprove(TokenInterface token, address to , uint256 amount) internal {
+        bytes memory data = abi.encodeWithSelector(token.approve.selector, to, amount);
+        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
+        if (returndata.length > 0) {
+            require(abi.decode(returndata, (bool)), "not succeed");
+        }
+    }
+
+    function functionCall(address target, bytes memory data, string memory errorMessage) internal returns (bytes memory) {
+        return _functionCallWithValue(target, data, errorMessage);
+    }
+
+    function _functionCallWithValue(address target, bytes memory data, string memory errorMessage) internal returns (bytes memory) {
+        (bool success, bytes memory returndata) = target.call(data);// value: weiValue }(data);
+        if (success) {
+            return returndata;
+        } else {
+            // Look for revert reason and bubble it up if present
+            if (returndata.length > 0) {
+                // The easiest way to bubble the revert reason is using memory via assembly
+
+                // solhint-disable-next-line no-inline-assembly
+                assembly {
+                    let returndata_size := mload(returndata)
+                    revert(add(32, returndata), returndata_size)
+                }
+            } else {
+                revert(errorMessage);
+            }
+        }
     }
 
     function() external payable {}

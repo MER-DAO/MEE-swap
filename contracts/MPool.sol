@@ -10,13 +10,15 @@ interface IMFactory {
 }
 
 interface IMining {
+    // pair
     function addLiquidity(bool isGp, address _user, uint256 _amount) external;
     function removeLiquidity(bool isGp, address _user, uint256 _amount) external;
-    function claimLiquidityShares(address user, address[] calldata tokens, uint256[] calldata balances, uint256[] calldata weights, uint256 amount, bool _add) external;
-    function claimSwapShare(address user, address tokenIn, uint256 amountIn, address tokenOut, uint256 amountOut) external;
     function updateGPInfo(address[] calldata gps, uint256[] calldata amounts) external;
+    // lp mining
     function onTransferLiquidity(address from, address to, uint256 lpAmount) external;
-    function poolIn(address pool) view external returns (bool);
+    function claimLiquidityShares(address user, address[] calldata tokens, uint256[] calldata balances, uint256[] calldata weights, uint256 amount, bool _add) external;
+    // swap mining
+    function claimSwapShare(address user, address tokenIn, uint256 amountIn, address tokenOut, uint256 amountOut) external;
 }
 
 contract MPool is MBronze, MToken, MMath {
@@ -77,12 +79,11 @@ contract MPool is MBronze, MToken, MMath {
     IMining private _pair;
     address public controller;  // has CONTROL role
 
-    bool private _publicSwap;     // true if PUBLIC can call SWAP functions
-
     // `setSwapFee` and `finalize` require CONTROL
     // `finalize` sets `PUBLIC can SWAP`, `PUBLIC can JOIN`
     uint private _swapFee;
     bool private _finalized;
+    bool private _publicSwap;     // true if PUBLIC can call SWAP functions
 
     address[] private _tokens;
     mapping(address => Record) private  _records;
@@ -242,7 +243,7 @@ contract MPool is MBronze, MToken, MMath {
 
         _mintPoolShare(supply);
         _pushPoolShare(beneficiary, supply);
-        _mining(true, beneficiary, supply);
+        _lpChanging(true, beneficiary, supply);
     }
 
 
@@ -297,11 +298,8 @@ contract MPool is MBronze, MToken, MMath {
         if (balance > oldBalance) {
             _pullUnderlying(token, msg.sender, bsub(balance, oldBalance));
         } else if (balance < oldBalance) {
-            // In this case liquidity is being withdrawn, so charge EXIT_FEE
             uint tokenBalanceWithdrawn = bsub(oldBalance, balance);
-            uint tokenExitFee = bmul(tokenBalanceWithdrawn, EXIT_FEE);
-            _pushUnderlying(token, msg.sender, bsub(tokenBalanceWithdrawn, tokenExitFee));
-            _pushUnderlying(token, address(_factory), tokenExitFee);
+            _pushUnderlying(token, msg.sender, tokenBalanceWithdrawn);
         }
     }
 
@@ -316,8 +314,6 @@ contract MPool is MBronze, MToken, MMath {
         require(!_finalized, "ERR_IS_FINALIZED");
 
         uint tokenBalance = _records[token].balance;
-        uint tokenExitFee = bmul(tokenBalance, EXIT_FEE);
-
         _totalWeight = bsub(_totalWeight, _records[token].denorm);
 
         // Swap the token-to-unbind with the last token,
@@ -334,8 +330,7 @@ contract MPool is MBronze, MToken, MMath {
         balance: 0
         });
 
-        _pushUnderlying(token, msg.sender, bsub(tokenBalance, tokenExitFee));
-        _pushUnderlying(token, address(_factory), tokenExitFee);
+        _pushUnderlying(token, msg.sender, tokenBalance);
     }
 
     // Absorb any tokens that have been sent to this contract into the pool
@@ -396,7 +391,7 @@ contract MPool is MBronze, MToken, MMath {
         _mintPoolShare(poolAmountOut);
         _pushPoolShare(beneficiary, poolAmountOut);
 
-        _mining(true, beneficiary, poolAmountOut);
+        _lpChanging(true, beneficiary, poolAmountOut);
     }
 
     function exitPool(uint poolAmountIn, uint[] calldata minAmountsOut)
@@ -407,14 +402,10 @@ contract MPool is MBronze, MToken, MMath {
         require(_finalized, "ERR_NOT_FINALIZED");
 
         uint poolTotal = totalSupply();
-        uint exitFee = bmul(poolAmountIn, EXIT_FEE);
-        uint pAiAfterExitFee = bsub(poolAmountIn, exitFee);
-        uint ratio = bdiv(pAiAfterExitFee, poolTotal);
+        uint ratio = bdiv(poolAmountIn, poolTotal);
         require(ratio != 0, "ERR_MATH_APPROX");
 
         _pullPoolShare(msg.sender, poolAmountIn);
-        _pushPoolShare(address(_factory), exitFee);
-        _burnPoolShare(pAiAfterExitFee);
 
         for (uint i = 0; i < _tokens.length; i++) {
             address t = _tokens[i];
@@ -427,7 +418,7 @@ contract MPool is MBronze, MToken, MMath {
             _pushUnderlying(t, msg.sender, tokenAmountOut);
         }
 
-        _mining(false, msg.sender, poolAmountIn);
+        _lpChanging(false, msg.sender, poolAmountIn);
     }
 
 
@@ -496,7 +487,7 @@ contract MPool is MBronze, MToken, MMath {
         _pushUnderlying(tokenOut, msg.sender, tokenAmountOut);
         _pushUnderlying(tokenIn, _factory.getFeeTo(), factoryFee);
 
-        _miningSwap(user, tokenIn, tokenOut, tokenAmountIn, tokenAmountOut);
+        _swapMining(user, tokenIn, tokenOut, tokenAmountIn, tokenAmountOut);
 
         return (tokenAmountOut, spotPriceAfter);
     }
@@ -564,7 +555,7 @@ contract MPool is MBronze, MToken, MMath {
         _pushUnderlying(tokenOut, msg.sender, tokenAmountOut);
         _pushUnderlying(tokenIn, _factory.getFeeTo(), factoryFee);
 
-        _miningSwap(user, tokenIn, tokenOut, tokenAmountIn, tokenAmountOut);
+        _swapMining(user, tokenIn, tokenOut, tokenAmountIn, tokenAmountOut);
         return (tokenAmountIn, spotPriceAfter);
     }
 
@@ -600,7 +591,7 @@ contract MPool is MBronze, MToken, MMath {
         _pushPoolShare(beneficiary, poolAmountOut);
         _pullUnderlying(tokenIn, msg.sender, tokenAmountIn);
 
-        _mining(true, beneficiary, poolAmountOut);
+        _lpChanging(true, beneficiary, poolAmountOut);
 
         return poolAmountOut;
     }
@@ -631,16 +622,14 @@ contract MPool is MBronze, MToken, MMath {
 
         outRecord.balance = bsub(outRecord.balance, tokenAmountOut);
 
-        uint exitFee = bmul(poolAmountIn, EXIT_FEE);
-
         emit LOG_EXIT(msg.sender, tokenOut, tokenAmountOut);
 
         _pullPoolShare(msg.sender, poolAmountIn);
-        _burnPoolShare(bsub(poolAmountIn, exitFee));
-        _pushPoolShare(address(_factory), exitFee);
+        _burnPoolShare(poolAmountIn);
+
         _pushUnderlying(tokenOut, msg.sender, tokenAmountOut);
 
-        _mining(false, msg.sender, poolAmountIn);
+        _lpChanging(false, msg.sender, poolAmountIn);
 
         return tokenAmountOut;
     }
@@ -662,15 +651,13 @@ contract MPool is MBronze, MToken, MMath {
     function _pullUnderlying(address erc20, address from, uint amount)
     internal
     {
-        bool xfer = IERC20(erc20).transferFrom(from, address(this), amount);
-        require(xfer, "ERR_ERC20_FALSE");
+        safeTransferFrom(IERC20(erc20), from, address(this), amount);
     }
 
     function _pushUnderlying(address erc20, address to, uint amount)
     internal
     {
-        bool xfer = IERC20(erc20).transfer(to, amount);
-        require(xfer, "ERR_ERC20_FALSE");
+        safeTransfer(IERC20(erc20), to, amount);
     }
 
     function _pullPoolShare(address from, uint amount)
@@ -697,7 +684,7 @@ contract MPool is MBronze, MToken, MMath {
         _burn(amount);
     }
 
-    function _mining(bool add, address user, uint256 amount)
+    function _lpChanging(bool add, address user, uint256 amount)
     internal
     {
         if (address(_pair) != address(0))
@@ -721,7 +708,7 @@ contract MPool is MBronze, MToken, MMath {
 
     }
 
-    function _miningSwap(address user, address tokenIn, address tokenOut, uint256 tokenAmountIn, uint256 tokenAmountOut)
+    function _swapMining(address user, address tokenIn, address tokenOut, uint256 tokenAmountIn, uint256 tokenAmountOut)
     internal
     {
         ( ,address swapMiningAdr) = _factory.getMining();

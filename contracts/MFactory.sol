@@ -8,13 +8,13 @@ contract MFactory is MBronze {
         address indexed pool
     );
 
-    mapping(address => bool) private _isMPool;
-    mapping(address => bool) private _isWhiteList;
-
     address private _lpMining;
     address private _swapMining;
 
-    function isBPool(address b)
+    mapping(address => bool) private _isMPool;
+    mapping(address => bool) private _isWhiteList;
+
+    function isMPool(address b)
     external view returns (bool)
     {
         return _isMPool[b];
@@ -70,15 +70,6 @@ contract MFactory is MBronze {
     {
         require(msg.sender == _mlabs, "ERR_NOT_BLABS");
         feeTo = b;
-    }
-
-    function collect(MPool pool)
-    external
-    {
-        require(msg.sender == _mlabs, "ERR_NOT_BLABS");
-        uint collected = IERC20(pool).balanceOf(address(this));
-        bool xfer = pool.transfer(_mlabs, collected);
-        require(xfer, "ERR_ERC20_FAILED");
     }
 
     function updateWhiteList(address w, bool status)

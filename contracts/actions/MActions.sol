@@ -100,11 +100,11 @@ contract MActions {
 
         for (uint i = 0; i < tokens.length; i++) {
             IERC20 token = IERC20(tokens[i]);
-            require(token.transferFrom(msg.sender, address(this), balances[i]), "ERR_TRANSFER_FAILED");
+            safeTransferFrom(token, msg.sender, address(this), balances[i]);
             if (token.allowance(address(this), address(pool)) > 0) {
-                token.approve(address(pool), 0);
+                safeApprove(token, address(pool), 0);
             }
-            token.approve(address(pool), balances[i]);
+            safeApprove(token, address(pool), balances[i]);
             pool.bind(tokens[i], balances[i], denorms[i]);
         }
         if (finalize) {
@@ -124,18 +124,18 @@ contract MActions {
 
         for (uint i = 0; i < tokens.length; i++) {
             IERC20 token = IERC20(tokens[i]);
-            require(token.transferFrom(msg.sender, address(this), maxAmountsIn[i]), "ERR_TRANSFER_FAILED");
+            safeTransferFrom(token, msg.sender, address(this), maxAmountsIn[i]);
             if (token.allowance(address(this), address(pool)) > 0) {
-                token.approve(address(pool), 0);
+                safeApprove(token, address(pool), 0);
             }
-            token.approve(address(pool), maxAmountsIn[i]);
+            safeApprove(token, address(pool), maxAmountsIn[i]);
         }
 
         pool.joinPool(msg.sender, poolAmountOut, maxAmountsIn);
         for (uint i = 0; i < tokens.length; i++) {
             IERC20 token = IERC20(tokens[i]);
             if (token.balanceOf(address(this)) > 0) {
-                require(token.transfer(msg.sender, token.balanceOf(address(this))), "ERR_TRANSFER_FAILED");
+                safeTransfer(token, msg.sender, token.balanceOf(address(this)));
             }
         }
     }
@@ -147,11 +147,59 @@ contract MActions {
         uint minPoolAmountOut
     ) external {
         IERC20 token = IERC20(tokenIn);
-        require(token.transferFrom(msg.sender, address(this), tokenAmountIn), "ERR_TRANSFER_FAILED");
+        safeTransferFrom(token, msg.sender, address(this), tokenAmountIn);
         if (token.allowance(address(this), address(pool)) > 0) {
-            token.approve(address(pool), 0);
+            safeApprove(token, address(pool), 0);
         }
-        token.approve(address(pool), tokenAmountIn);
+        safeApprove(token, address(pool), tokenAmountIn);
         pool.joinswapExternAmountIn(msg.sender, tokenIn, tokenAmountIn, minPoolAmountOut);
+    }
+
+    function safeTransfer(IERC20 token, address to , uint256 amount) internal {
+        bytes memory data = abi.encodeWithSelector(token.transfer.selector, to, amount);
+        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
+        if (returndata.length > 0) {
+            require(abi.decode(returndata, (bool)), "not succeed");
+        }
+    }
+
+    function safeTransferFrom(IERC20 token, address from, address to , uint256 amount) internal {
+        bytes memory data = abi.encodeWithSelector(token.transferFrom.selector, from, to, amount);
+        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
+        if (returndata.length > 0) {
+            require(abi.decode(returndata, (bool)), "not succeed");
+        }
+    }
+
+    function safeApprove(IERC20 token, address to , uint256 amount) internal {
+        bytes memory data = abi.encodeWithSelector(token.approve.selector, to, amount);
+        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
+        if (returndata.length > 0) {
+            require(abi.decode(returndata, (bool)), "not succeed");
+        }
+    }
+
+    function functionCall(address target, bytes memory data, string memory errorMessage) internal returns (bytes memory) {
+        return _functionCallWithValue(target, data, errorMessage);
+    }
+
+    function _functionCallWithValue(address target, bytes memory data, string memory errorMessage) internal returns (bytes memory) {
+        (bool success, bytes memory returndata) = target.call(data);// value: weiValue }(data);
+        if (success) {
+            return returndata;
+        } else {
+            // Look for revert reason and bubble it up if present
+            if (returndata.length > 0) {
+                // The easiest way to bubble the revert reason is using memory via assembly
+
+                // solhint-disable-next-line no-inline-assembly
+                assembly {
+                    let returndata_size := mload(returndata)
+                    revert(add(32, returndata), returndata_size)
+                }
+            } else {
+                revert(errorMessage);
+            }
+        }
     }
 }
