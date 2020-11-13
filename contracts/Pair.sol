@@ -51,7 +51,7 @@ contract PairToken is PairERC20 {
         _endBlock = block.number.add(12500000);
         _poolLastRewardBlock = block.number;
 
-        require(rate < 100, "ERR_OVER_MAXIMUM");
+        require(rate <= 15, "ERR_OVER_MAXIMUM");
         _gpRate = rate;
     }
 
@@ -68,8 +68,8 @@ contract PairToken is PairERC20 {
 
         if (user.amount == 0) {return 0;}
         uint256 rate = gpReward ? _gpRate : 100 - _gpRate;
-        uint256 accPerShare = gpReward ? _poolAccPairGpPerShare: _poolAccPairPerShare ;
-        uint256 lpSupply = gpReward? _totalGpSupply: _totalLpSupply;
+        uint256 accPerShare = gpReward ? _poolAccPairGpPerShare : _poolAccPairPerShare ;
+        uint256 lpSupply = gpReward? _totalGpSupply : _totalLpSupply;
 
         if (block.number > _poolLastRewardBlock && lpSupply != 0) {
             uint256 blockNum = block.number.sub(_poolLastRewardBlock);
@@ -77,7 +77,7 @@ contract PairToken is PairERC20 {
             if (_gpRate > 0) {
                 pairReward = pairReward.mul(rate).div(100);
             }
-            accPerShare = accPerShare.add(pairReward.mul(1e12)).div(lpSupply);
+            accPerShare = accPerShare.add(pairReward.mul(1e12).div(lpSupply));
         }
         return user.amount.mul(accPerShare).div(1e12).sub(user.rewardDebt);
     }
@@ -87,6 +87,10 @@ contract PairToken is PairERC20 {
         if (block.number <= _poolLastRewardBlock) {return;}
 
         if (_totalLpSupply == 0) {
+            _poolLastRewardBlock = block.number;
+            return;
+        }
+        if (_gpRate > 0 && _totalGpSupply == 0){
             _poolLastRewardBlock = block.number;
             return;
         }
@@ -103,6 +107,7 @@ contract PairToken is PairERC20 {
         }
 
         uint256 pairReward = blockNum.mul(_pairPerBlock);
+
         _mint(pairReward);
 
         uint256 lpPairReward;
@@ -113,7 +118,6 @@ contract PairToken is PairERC20 {
             _poolAccPairGpPerShare = _poolAccPairGpPerShare.add(gpReward.mul(1e12).div(_totalGpSupply));
             lpPairReward = pairReward.sub(gpReward);
         }
-
         _poolAccPairPerShare = _poolAccPairPerShare.add(lpPairReward.mul(1e12).div(_totalLpSupply));
     }
 
@@ -140,11 +144,7 @@ contract PairToken is PairERC20 {
 
         if (_amount > 0) {
             user.amount = user.amount.add(_amount);
-            if (isGp) {
-                _totalGpSupply += _amount;
-            } else {
-                _totalLpSupply += _amount;
-            }
+            isGp ? _totalGpSupply += _amount : _totalLpSupply += _amount;
             emit Deposit(isGp, _user, _amount);
         }
         user.rewardDebt = user.amount.mul(accPerShare).div(1e12);
@@ -181,7 +181,6 @@ contract PairToken is PairERC20 {
         updatePool();
 
         uint256 accPerShare = isGp ? _poolAccPairGpPerShare : _poolAccPairPerShare;
-        uint256 totalSupply = isGp ? _totalGpSupply: _totalLpSupply ;
 
         uint256 pending = user.amount.mul(accPerShare).div(1e12).sub(user.rewardDebt);
         if (pending > 0) {
@@ -189,7 +188,7 @@ contract PairToken is PairERC20 {
         }
         if (_amount > 0) {
             user.amount = user.amount.sub(_amount);
-            totalSupply -= _amount;
+            isGp ? _totalGpSupply -= _amount : _totalLpSupply -= _amount;
             emit Withdraw(isGp, _user, _amount);
         }
         user.rewardDebt = user.amount.mul(accPerShare).div(1e12);
@@ -200,38 +199,18 @@ contract PairToken is PairERC20 {
         require(_gpRate > 0, "ERR_NO_GP_SHARE_REMAIN");
         require(gps.length == amounts.length, "ERR_INVALID_PARAM");
 
-        // init setup
-        if (_totalGpSupply == 0) {
-            for (uint i = 0; i < gps.length; i++) {
-                UserInfo memory user = gpInfoList[gps[i]];
-                if (user.amount == 0) {
-                    _totalGpSupply += amounts[i];
+        for (uint i = 0; i < gps.length; i++) {
+            UserInfo memory user = gpInfoList[gps[i]];
+            if (user.amount == 0) {
+                if (user.rewardDebt == 0) {
                     _gpInfo.push(gps[i]);
                 }
-            }
-            for (uint i = 0; i < gps.length; i++) {
                 _addLiquidity(true, gps[i], amounts[i]);
-            }
-            return;
-        }
-
-        for (uint i = 0; i < gps.length; i++) {
-            if (gps[i] == address(0)) {
-                continue;
-            }
-            UserInfo memory user = gpInfoList[gps[i]];
-            // add new gp
-            if (user.amount == 0) {
-                _totalGpSupply += amounts[i];
-                _addLiquidity(true, gps[i], amounts[i]);
-                _gpInfo.push(gps[i]);
             }else if (user.amount > amounts[i]) {
                 uint256 shareChange = user.amount.sub(amounts[i]);
-                _totalGpSupply -= shareChange;
                 _removeLiquidity(true, gps[i], shareChange);
             }else if (user.amount < amounts[i]) {
                 uint256 shareChange = amounts[i].sub(user.amount);
-                _totalGpSupply += shareChange;
                 _addLiquidity(true, gps[i], shareChange);
             }
         }
@@ -239,15 +218,15 @@ contract PairToken is PairERC20 {
         // filter gpInfo find out which gp need to remove
         for (uint i = 0; i < _gpInfo.length; i++) {
             bool needRemove = true;
-            for (uint j = 0; j < gps.length; i++) {
-                if (gps[i] == _gpInfo[j]) {
+            for (uint j = 0; j < gps.length; j++) {
+                if (gps[j] == _gpInfo[i]) {
                     needRemove = false;
+                    break;
                 }
             }
             if (needRemove) {
                 UserInfo memory user = gpInfoList[gps[i]];
                 _removeLiquidity(true, gps[i], user.amount);
-                _totalGpSupply -= user.amount;
             }
         }
     }

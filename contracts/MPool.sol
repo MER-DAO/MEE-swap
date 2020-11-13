@@ -406,6 +406,7 @@ contract MPool is MBronze, MToken, MMath {
         require(ratio != 0, "ERR_MATH_APPROX");
 
         _pullPoolShare(msg.sender, poolAmountIn);
+        _burnPoolShare(poolAmountIn);
 
         for (uint i = 0; i < _tokens.length; i++) {
             address t = _tokens[i];
