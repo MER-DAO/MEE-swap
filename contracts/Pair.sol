@@ -197,7 +197,7 @@ contract PairToken is PairERC20 {
     function updateGPInfo(address[] calldata gps, uint256[] calldata amounts) external {
         require(msg.sender == address(_pool), "ERR_POOL_ONLY");
         require(_gpRate > 0, "ERR_NO_GP_SHARE_REMAIN");
-        require(gps.length == amounts.length, "ERR_INVALID_PARAM");
+        require(gps.length > 0 && gps.length == amounts.length, "ERR_INVALID_PARAM");
 
         for (uint i = 0; i < gps.length; i++) {
             UserInfo memory user = gpInfoList[gps[i]];
