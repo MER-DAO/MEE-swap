@@ -121,7 +121,24 @@ contract PairToken is PairERC20 {
         _poolAccPairPerShare = _poolAccPairPerShare.add(lpPairReward.mul(1e12).div(_totalLpSupply));
     }
 
-    // add liquidity LP tokens to PairBar for Pair allocation.
+    function claimPair(bool isGp, address _user) external {
+        UserInfo storage user = isGp ? gpInfoList[_user] : lpInfoList[_user];
+
+        if (isGp) { require(_gpRate > 0, "ERR_NO_GP_SHARE_REMAIN"); }
+
+        updatePool();
+
+        uint256 accPerShare = isGp ? _poolAccPairGpPerShare: _poolAccPairPerShare ;
+        if (user.amount > 0) {
+            uint256 pending = user.amount.mul(accPerShare).div(1e12).sub(user.rewardDebt);
+            if (pending > 0) {
+                _move(address(this), _user, pending);
+            }
+        }
+        user.rewardDebt = user.amount.mul(accPerShare).div(1e12);
+        return;
+    }
+
     function addLiquidity(bool isGp, address _user, uint256 _amount) external {
         require(msg.sender == address(_pool), "ERR_POOL_ONLY");
         _addLiquidity(isGp, _user, _amount);
@@ -150,25 +167,6 @@ contract PairToken is PairERC20 {
         user.rewardDebt = user.amount.mul(accPerShare).div(1e12);
     }
 
-    function claimPair(bool isGp, address _user) external {
-        UserInfo storage user = isGp ? gpInfoList[_user] : lpInfoList[_user];
-
-        if (isGp) { require(_gpRate > 0, "ERR_NO_GP_SHARE_REMAIN"); }
-
-        updatePool();
-
-        uint256 accPerShare = isGp ? _poolAccPairGpPerShare: _poolAccPairPerShare ;
-        if (user.amount > 0) {
-            uint256 pending = user.amount.mul(accPerShare).div(1e12).sub(user.rewardDebt);
-            if (pending > 0) {
-                _move(address(this), _user, pending);
-            }
-        }
-        user.rewardDebt = user.amount.mul(accPerShare).div(1e12);
-        return;
-    }
-
-    // remove liquidity LP tokens from PairBar.
     function removeLiquidity(bool isGp, address _user, uint256 _amount) external {
         require(msg.sender == address(_pool), "ERR_POOL_ONLY");
         _removeLiquidity(isGp, _user, _amount);
@@ -215,7 +213,6 @@ contract PairToken is PairERC20 {
             }
         }
 
-        // filter gpInfo find out which gp need to remove
         for (uint i = 0; i < _gpInfo.length; i++) {
             bool needRemove = true;
             for (uint j = 0; j < gps.length; j++) {
