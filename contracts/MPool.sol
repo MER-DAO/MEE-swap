@@ -77,7 +77,7 @@ contract MPool is MBronze, MToken, MMath {
 
     IMFactory private _factory;    // MFactory address to push token exitFee to and check whitelist from factory
     IMining private _pair;
-    address public controller;  // has CONTROL role
+    address public controller;     // has CONTROL role
 
     // `setSwapFee` and `finalize` require CONTROL
     // `finalize` sets `PUBLIC can SWAP`, `PUBLIC can JOIN`
@@ -262,7 +262,7 @@ contract MPool is MBronze, MToken, MMath {
         bound: true,
         index: _tokens.length,
         denorm: 0,    // balance and denorm will be validated
-        balance: 0   // and set by `rebind`
+        balance: 0    // and set by `rebind`
         });
         _tokens.push(token);
         rebind(token, balance, denorm);
@@ -645,7 +645,6 @@ contract MPool is MBronze, MToken, MMath {
         }
     }
 
-    // ==
     // 'Underlying' token-manipulation functions make external calls but are NOT locked
     // You must `_lock_` or otherwise ensure reentry-safety
 
