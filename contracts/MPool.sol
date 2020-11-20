@@ -536,7 +536,7 @@ contract MPool is MBronze, MToken, MMath {
 
         uint256 factoryFee = bmul(tokenAmountIn, bmul(bdiv(_swapFee, 6), 1));
 
-        inRecord.balance = badd(inRecord.balance, factoryFee);
+        inRecord.balance = badd(inRecord.balance, bsub(tokenAmountIn, factoryFee));
         outRecord.balance = bsub(outRecord.balance, tokenAmountOut);
 
         spotPriceAfter = calcSpotPrice(

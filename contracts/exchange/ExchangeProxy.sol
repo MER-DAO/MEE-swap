@@ -283,6 +283,7 @@ interface PoolInterface {
     function getDenormalizedWeight(address) external view returns (uint);
     function getBalance(address) external view returns (uint);
     function getSwapFee() external view returns (uint);
+    function gulp(address) external;
 }
 
 interface TokenInterface {
@@ -404,6 +405,7 @@ contract ExchangeProxy is Ownable {
                 swap.maxPrice
             );
             totalAmountIn = tokenAmountIn.add(totalAmountIn);
+            pool.gulp(swap.tokenIn);
         }
         require(totalAmountIn <= maxTotalAmountIn, "ERR_LIMIT_IN");
 
@@ -495,6 +497,7 @@ contract ExchangeProxy is Ownable {
                     swap.swapAmount,
                     swap.maxPrice
                 );
+                pool.gulp(swap.tokenIn);
             } else {
                 // Consider we are swapping A -> B and B -> C. The goal is to buy a given amount
                 // of token C. But first we need to buy B with A so we can then buy C with B
@@ -527,6 +530,7 @@ contract ExchangeProxy is Ownable {
                     intermediateTokenAmount, // This is the amount of token B we need
                     firstSwap.maxPrice
                 );
+                poolFirstSwap.gulp(firstSwap.tokenIn);
 
                 //// Buy the final amount of token C desired
                 TokenInterface SecondSwapTokenIn = TokenInterface(secondSwap.tokenIn);
@@ -542,6 +546,7 @@ contract ExchangeProxy is Ownable {
                     secondSwap.swapAmount,
                     secondSwap.maxPrice
                 );
+                poolSecondSwap.gulp(secondSwap.tokenIn);
             }
             totalAmountIn = tokenAmountInFirstSwap.add(totalAmountIn);
         }
@@ -558,7 +563,7 @@ contract ExchangeProxy is Ownable {
         if (isETH(token)) {
             weth.deposit.value(msg.value)();
         } else {
-//            require(token.transferFrom(msg.sender, address(this), amount), "ERR_TRANSFER_FAILED");
+            //            require(token.transferFrom(msg.sender, address(this), amount), "ERR_TRANSFER_FAILED");
             safeTransferFrom(token, msg.sender, address(this), amount);
         }
     }
@@ -581,7 +586,7 @@ contract ExchangeProxy is Ownable {
             (bool xfer,) = msg.sender.call.value(amount)("");
             require(xfer, "ERR_ETH_FAILED");
         } else {
-//            require(token.transfer(msg.sender, amount), "ERR_TRANSFER_FAILED");
+            //            require(token.transfer(msg.sender, amount), "ERR_TRANSFER_FAILED");
             safeTransfer(token, msg.sender, amount);
         }
     }
