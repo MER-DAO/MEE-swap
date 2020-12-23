@@ -32,7 +32,7 @@ contract MMath is MBronze, MConst, MNum {
         uint tokenWeightOut,
         uint swapFee
     )
-    internal pure
+    public pure
     returns (uint spotPrice)
     {
         uint numer = bdiv(tokenBalanceIn, tokenWeightIn);

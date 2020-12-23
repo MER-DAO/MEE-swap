@@ -21,6 +21,15 @@ interface IMining {
     function claimSwapShare(address user, address tokenIn, uint256 amountIn, address tokenOut, uint256 amountOut) external;
 }
 
+interface IPairFactory {
+    function newPair(address pool, uint256 perBlock, uint256 rate) external returns (IPairToken);
+    function getPairToken(address pool) external view returns (address);
+}
+
+interface IPairToken {
+    function setController(address _controller) external ;
+}
+
 contract MPool is MBronze, MToken, MMath {
 
     struct Record {
@@ -34,26 +43,26 @@ contract MPool is MBronze, MToken, MMath {
         address indexed caller,
         address indexed tokenIn,
         address indexed tokenOut,
-        uint256         tokenAmountIn,
-        uint256         tokenAmountOut
+        uint256 tokenAmountIn,
+        uint256 tokenAmountOut
     );
 
     event LOG_JOIN(
         address indexed caller,
         address indexed tokenIn,
-        uint256         tokenAmountIn
+        uint256 tokenAmountIn
     );
 
     event LOG_EXIT(
         address indexed caller,
         address indexed tokenOut,
-        uint256         tokenAmountOut
+        uint256 tokenAmountOut
     );
 
     event LOG_CALL(
         bytes4  indexed sig,
         address indexed caller,
-        bytes           data
+        bytes data
     ) anonymous;
 
     modifier _logs_() {
@@ -224,6 +233,12 @@ contract MPool is MBronze, MToken, MMath {
     _lock_
     {
         require(msg.sender == controller, "ERR_NOT_CONTROLLER");
+        _setPair(pair);
+    }
+
+    function _setPair(IMining pair)
+    internal
+    {
         _pair = pair;
     }
 
@@ -367,7 +382,7 @@ contract MPool is MBronze, MToken, MMath {
         return calcSpotPrice(inRecord.balance, inRecord.denorm, outRecord.balance, outRecord.denorm, 0);
     }
 
-    function joinPool(address beneficiary, uint poolAmountOut, uint[] calldata maxAmountsIn)
+    function joinPool(address beneficiary, uint poolAmountOut)
     external
     _logs_
     _lock_
@@ -383,10 +398,9 @@ contract MPool is MBronze, MToken, MMath {
             uint bal = _records[t].balance;
             uint tokenAmountIn = bmul(ratio, bal);
             require(tokenAmountIn != 0, "ERR_MATH_APPROX");
-            require(tokenAmountIn <= maxAmountsIn[i], "ERR_LIMIT_IN");
+            require(bsub(IERC20(_tokens[i]).balanceOf(address(this)), _records[t].balance) >= tokenAmountIn);
             _records[t].balance = badd(_records[t].balance, tokenAmountIn);
             emit LOG_JOIN(msg.sender, t, tokenAmountIn);
-            _pullUnderlying(t, msg.sender, tokenAmountIn);
         }
         _mintPoolShare(poolAmountOut);
         _pushPoolShare(beneficiary, poolAmountOut);
@@ -426,13 +440,12 @@ contract MPool is MBronze, MToken, MMath {
     function swapExactAmountIn(
         address user,
         address tokenIn,
-        uint tokenAmountIn,
         address tokenOut,
         uint minAmountOut,
+        address to,
         uint maxPrice
     )
     external
-    _logs_
     _lock_
     returns (uint tokenAmountOut, uint spotPriceAfter)
     {
@@ -444,6 +457,8 @@ contract MPool is MBronze, MToken, MMath {
         Record storage inRecord = _records[address(tokenIn)];
         Record storage outRecord = _records[address(tokenOut)];
 
+        uint tokenAmountIn = bsub(IERC20(tokenIn).balanceOf(address(this)), inRecord.balance);
+        require(tokenAmountIn > 0, "ERR_AMOUNTIN_NOT_IN_Pool");
         require(tokenAmountIn <= bmul(inRecord.balance, MAX_IN_RATIO), "ERR_MAX_IN_RATIO");
 
         uint256 factoryFee = bmul(tokenAmountIn, bmul(bdiv(_swapFee, 6), 1));
@@ -484,8 +499,7 @@ contract MPool is MBronze, MToken, MMath {
 
         emit LOG_SWAP(msg.sender, tokenIn, tokenOut, tokenAmountIn, tokenAmountOut);
 
-        _pullUnderlying(tokenIn, msg.sender, tokenAmountIn);
-        _pushUnderlying(tokenOut, msg.sender, tokenAmountOut);
+        _pushUnderlying(tokenOut, to, tokenAmountOut);
         _pushUnderlying(tokenIn, _factory.getFeeTo(), factoryFee);
 
         _swapMining(user, tokenIn, tokenOut, tokenAmountIn, tokenAmountOut);
@@ -499,10 +513,10 @@ contract MPool is MBronze, MToken, MMath {
         uint maxAmountIn,
         address tokenOut,
         uint tokenAmountOut,
+        address to,
         uint maxPrice
     )
     external
-    _logs_
     _lock_
     returns (uint tokenAmountIn, uint spotPriceAfter)
     {
@@ -532,7 +546,8 @@ contract MPool is MBronze, MToken, MMath {
             tokenAmountOut,
             _swapFee
         );
-        require(tokenAmountIn <= maxAmountIn, "ERR_LIMIT_IN");
+        uint user_deposit_amount = bsub(IERC20(tokenIn).balanceOf(address(this)), inRecord.balance);
+        require(tokenAmountIn == user_deposit_amount && user_deposit_amount <= maxAmountIn, "ERR_LIMIT_IN");
 
         uint256 factoryFee = bmul(tokenAmountIn, bmul(bdiv(_swapFee, 6), 1));
 
@@ -552,87 +567,42 @@ contract MPool is MBronze, MToken, MMath {
 
         emit LOG_SWAP(msg.sender, tokenIn, tokenOut, tokenAmountIn, tokenAmountOut);
 
-        _pullUnderlying(tokenIn, msg.sender, tokenAmountIn);
-        _pushUnderlying(tokenOut, msg.sender, tokenAmountOut);
+        _pushUnderlying(tokenOut, to, tokenAmountOut);
         _pushUnderlying(tokenIn, _factory.getFeeTo(), factoryFee);
 
         _swapMining(user, tokenIn, tokenOut, tokenAmountIn, tokenAmountOut);
         return (tokenAmountIn, spotPriceAfter);
     }
 
-
-    function joinswapExternAmountIn(address beneficiary, address tokenIn, uint tokenAmountIn, uint minPoolAmountOut)
-    external
-    _logs_
-    _lock_
-    returns (uint poolAmountOut)
+    function calcDesireByGivenAmount(address tokenIn, address tokenOut, uint256 inAmount, uint256 outAmount)
+    external view
+    returns (uint desireAmount)
     {
-        require(_finalized, "ERR_NOT_FINALIZED");
-        require(_records[tokenIn].bound, "ERR_NOT_BOUND");
-        require(tokenAmountIn <= bmul(_records[tokenIn].balance, MAX_IN_RATIO), "ERR_MAX_IN_RATIO");
-
-        Record storage inRecord = _records[tokenIn];
-
-        poolAmountOut = calcPoolOutGivenSingleIn(
-            inRecord.balance,
-            inRecord.denorm,
-            _totalSupply,
-            _totalWeight,
-            tokenAmountIn,
-            _swapFee
-        );
-
-        require(poolAmountOut >= minPoolAmountOut, "ERR_LIMIT_OUT");
-
-        inRecord.balance = badd(inRecord.balance, tokenAmountIn);
-
-        emit LOG_JOIN(msg.sender, tokenIn, tokenAmountIn);
-
-        _mintPoolShare(poolAmountOut);
-        _pushPoolShare(beneficiary, poolAmountOut);
-        _pullUnderlying(tokenIn, msg.sender, tokenAmountIn);
-
-        _lpChanging(true, beneficiary, poolAmountOut);
-
-        return poolAmountOut;
+        require(inAmount != 0 || outAmount != 0, "ERR_AMOUNT_IS_ZERO");
+        Record memory inRecord = _records[address(tokenIn)];
+        Record memory outRecord = _records[address(tokenOut)];
+        if (inAmount != 0) {
+            desireAmount = calcOutGivenIn(inRecord.balance, inRecord.denorm, outRecord.balance, outRecord.denorm, inAmount, _swapFee);
+        } else {
+            desireAmount = calcInGivenOut(inRecord.balance, inRecord.denorm, outRecord.balance, outRecord.denorm, outAmount, _swapFee);
+        }
     }
-
-    function exitswapPoolAmountIn(address tokenOut, uint poolAmountIn, uint minAmountOut)
-    external
-    _logs_
-    _lock_
-    returns (uint tokenAmountOut)
+    function calcPoolSpotPrice(address tokenIn, address tokenOut, uint256 inAmount, uint256 outAmount)
+    external view
+    returns (uint256 price)
     {
-        require(_finalized, "ERR_NOT_FINALIZED");
-        require(_records[tokenOut].bound, "ERR_NOT_BOUND");
-
-        Record storage outRecord = _records[tokenOut];
-
-        tokenAmountOut = calcSingleOutGivenPoolIn(
-            outRecord.balance,
-            outRecord.denorm,
-            _totalSupply,
-            _totalWeight,
-            poolAmountIn,
-            _swapFee
-        );
-
-        require(tokenAmountOut >= minAmountOut, "ERR_LIMIT_OUT");
-
-        require(tokenAmountOut <= bmul(_records[tokenOut].balance, MAX_OUT_RATIO), "ERR_MAX_OUT_RATIO");
-
-        outRecord.balance = bsub(outRecord.balance, tokenAmountOut);
-
-        emit LOG_EXIT(msg.sender, tokenOut, tokenAmountOut);
-
-        _pullPoolShare(msg.sender, poolAmountIn);
-        _burnPoolShare(poolAmountIn);
-
-        _pushUnderlying(tokenOut, msg.sender, tokenAmountOut);
-
-        _lpChanging(false, msg.sender, poolAmountIn);
-
-        return tokenAmountOut;
+        Record memory inRecord = _records[address(tokenIn)];
+        Record memory outRecord = _records[address(tokenOut)];
+        if (inAmount != 0 && outAmount != 0) {
+            price = calcSpotPrice(
+                badd(inRecord.balance, inAmount),
+                inRecord.denorm,
+                bsub(outRecord.balance, outAmount),
+                outRecord.denorm,
+                _swapFee);
+        } else {
+            price = calcSpotPrice(inRecord.balance, inRecord.denorm, outRecord.balance, outRecord.denorm, _swapFee);
+        }
     }
 
     function updatePairGPInfo(address[] calldata gps, uint[] calldata shares)
@@ -651,13 +621,13 @@ contract MPool is MBronze, MToken, MMath {
     function _pullUnderlying(address erc20, address from, uint amount)
     internal
     {
-        safeTransferFrom(IERC20(erc20), from, address(this), amount);
+        safeTransferFrom(erc20, from, address(this), amount);
     }
 
     function _pushUnderlying(address erc20, address to, uint amount)
     internal
     {
-        safeTransfer(IERC20(erc20), to, amount);
+        safeTransfer(erc20, to, amount);
     }
 
     function _pullPoolShare(address from, uint amount)
@@ -747,5 +717,20 @@ contract MPool is MBronze, MToken, MMath {
             _transferLiquidity(src, dst, amt);
         }
         return true;
+    }
+
+    function bindPair(
+        IPairFactory pairFactory,
+        address[] calldata gps,
+        uint[] calldata shares,
+        uint gpRate
+    ) external {
+        require(msg.sender == controller, "ERR_NOT_CONTROLLER");
+        IPairToken pair = pairFactory.newPair(address(this), 4 * 10 ** 18, gpRate);
+        _setPair(IMining(address(pair)));
+        if (gpRate > 0 && gpRate <= 15 && gps.length != 0 && gps.length == shares.length) {
+            _pair.updateGPInfo(gps, shares);
+        }
+        pair.setController(msg.sender);
     }
 }

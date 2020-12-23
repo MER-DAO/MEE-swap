@@ -183,7 +183,7 @@ library SafeMath {
 contract Context {
     // Empty internal constructor, to prevent people from mistakenly deploying
     // an instance of this contract, which should be used via inheritance.
-    constructor () internal { }
+    constructor () internal {}
     // solhint-disable-previous-line no-empty-blocks
 
     function _msgSender() internal view returns (address _payable) {
@@ -191,7 +191,8 @@ contract Context {
     }
 
     function _msgData() internal view returns (bytes memory) {
-        this; // silence state mutability warning without generating bytecode - see https://github.com/ethereum/solidity/issues/2691
+        this;
+        // silence state mutability warning without generating bytecode - see https://github.com/ethereum/solidity/issues/2691
         return msg.data;
     }
 }
@@ -272,23 +273,40 @@ contract Ownable is Context {
 }
 
 interface PoolInterface {
-    function swapExactAmountIn(address, address, uint, address, uint, uint) external returns (uint, uint);
-    function swapExactAmountOut(address, address, uint, address, uint, uint) external returns (uint, uint);
+    function swapExactAmountIn(address, address, address, uint, address, uint) external returns (uint, uint);
+
+    function swapExactAmountOut(address, address, uint, address, uint, address, uint) external returns (uint, uint);
+
     function calcInGivenOut(uint, uint, uint, uint, uint, uint) external pure returns (uint);
+
     function calcOutGivenIn(uint, uint, uint, uint, uint, uint) external pure returns (uint);
+
     function getDenormalizedWeight(address) external view returns (uint);
+
     function getBalance(address) external view returns (uint);
+
     function getSwapFee() external view returns (uint);
+
     function gulp(address) external;
+
+    function calcDesireByGivenAmount(address, address, uint256, uint256) view external returns (uint);
+
+    function calcPoolSpotPrice(address, address, uint256, uint256) external view returns (uint256);
 }
 
 interface TokenInterface {
     function balanceOf(address) external view returns (uint);
+
     function allowance(address, address) external view returns (uint);
+
     function approve(address, uint) external returns (bool);
+
     function transfer(address, uint) external returns (bool);
+
     function transferFrom(address, address, uint) external returns (bool);
+
     function deposit() external payable;
+
     function withdraw(uint) external;
 }
 
@@ -302,27 +320,27 @@ contract ExchangeProxy is Ownable {
 
     struct Pool {
         address pool;
-        uint    tokenBalanceIn;
-        uint    tokenWeightIn;
-        uint    tokenBalanceOut;
-        uint    tokenWeightOut;
-        uint    swapFee;
-        uint    effectiveLiquidity;
+        uint tokenBalanceIn;
+        uint tokenWeightIn;
+        uint tokenBalanceOut;
+        uint tokenWeightOut;
+        uint swapFee;
+        uint effectiveLiquidity;
     }
 
     struct Swap {
         address pool;
         address tokenIn;
         address tokenOut;
-        uint    swapAmount; // tokenInAmount / tokenOutAmount
-        uint    limitReturnAmount; // minAmountOut / maxAmountIn
-        uint    maxPrice;
+        uint swapAmount; // tokenInAmount / tokenOutAmount
+        uint limitReturnAmount; // minAmountOut / maxAmountIn
+        uint maxPrice;
     }
 
     TokenInterface weth;
     RegistryInterface registry;
     address private constant ETH_ADDRESS = address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE);
-    uint private constant BONE = 10**18;
+    uint private constant BONE = 10 ** 18;
 
     constructor(address _weth) public {
         weth = TokenInterface(_weth);
@@ -342,33 +360,39 @@ contract ExchangeProxy is Ownable {
     public payable
     returns (uint totalAmountOut)
     {
-        transferFromAll(tokenIn, totalAmountIn);
-
+        address from = msg.sender;
+        if (isETH(tokenIn)) {
+            require(msg.value >= totalAmountIn, "ERROR_ETH_IN");
+            weth.deposit.value(totalAmountIn)();
+            from = address(this);
+        }
+        uint _totalSwapIn = 0;
         for (uint i = 0; i < swaps.length; i++) {
             Swap memory swap = swaps[i];
-            TokenInterface SwapTokenIn = TokenInterface(swap.tokenIn);
+            require(swap.tokenIn == address(tokenIn) || (swap.tokenIn == address(weth) && isETH(tokenIn)), "ERR_TOKENIN_NOT_MATCH");
+            safeTransferFrom(swap.tokenIn, from, swap.pool, swap.swapAmount);
+            address _to = (swap.tokenOut == address(weth) && isETH(tokenOut)) ? address(this) : msg.sender;
             PoolInterface pool = PoolInterface(swap.pool);
-
-            if (SwapTokenIn.allowance(address(this), swap.pool) > 0) {
-                safeApprove(SwapTokenIn, swap.pool, 0);
-            }
-            safeApprove(SwapTokenIn, swap.pool, swap.swapAmount);
-
             (uint tokenAmountOut,) = pool.swapExactAmountIn(
                 msg.sender,
                 swap.tokenIn,
-                swap.swapAmount,
                 swap.tokenOut,
                 swap.limitReturnAmount,
+                _to,
                 swap.maxPrice
             );
+            if (_to != msg.sender) {
+                transferAll(tokenOut, tokenAmountOut);
+            }
             totalAmountOut = tokenAmountOut.add(totalAmountOut);
+            _totalSwapIn = _totalSwapIn.add(swap.swapAmount);
         }
-
+        require(_totalSwapIn == totalAmountIn, "ERR_TOTAL_AMOUNT_IN");
         require(totalAmountOut >= minTotalAmountOut, "ERR_LIMIT_OUT");
-
-        transferAll(tokenOut, totalAmountOut);
-        transferAll(tokenIn, getBalance(tokenIn));
+        if (isETH(tokenIn) && msg.value > _totalSwapIn) {
+            (bool xfer,) = msg.sender.call.value(msg.value.sub(_totalSwapIn))("");
+            require(xfer, "ERR_ETH_FAILED");
+        }
     }
 
     function batchSwapExactOut(
@@ -380,34 +404,36 @@ contract ExchangeProxy is Ownable {
     public payable
     returns (uint totalAmountIn)
     {
-        transferFromAll(tokenIn, maxTotalAmountIn);
-
+        address from = msg.sender;
+        if (isETH(tokenIn)) {
+            weth.deposit.value(msg.value)();
+            from = address(this);
+        }
         for (uint i = 0; i < swaps.length; i++) {
             Swap memory swap = swaps[i];
-            TokenInterface SwapTokenIn = TokenInterface(swap.tokenIn);
+            uint tokenAmountIn = getAmountIn(swap);
+            swap.tokenIn = isETH(tokenIn) ? address(weth) : swap.tokenIn;
+            safeTransferFrom(swap.tokenIn, from, swap.pool, tokenAmountIn);
+            address _to = (swap.tokenOut == address(weth) && isETH(tokenOut)) ? address(this) : msg.sender;
             PoolInterface pool = PoolInterface(swap.pool);
-
-            if (SwapTokenIn.allowance(address(this), swap.pool) > 0) {
-                safeApprove(SwapTokenIn, swap.pool, 0);
-            }
-            safeApprove(SwapTokenIn, swap.pool, swap.limitReturnAmount);
-
-            (uint tokenAmountIn,) = pool.swapExactAmountOut(
+            pool.swapExactAmountOut(
                 msg.sender,
                 swap.tokenIn,
                 swap.limitReturnAmount,
                 swap.tokenOut,
                 swap.swapAmount,
+                _to,
                 swap.maxPrice
             );
+            if (_to != msg.sender) {
+                transferAll(tokenOut, swap.swapAmount);
+            }
             totalAmountIn = tokenAmountIn.add(totalAmountIn);
-            pool.gulp(swap.tokenIn);
         }
         require(totalAmountIn <= maxTotalAmountIn, "ERR_LIMIT_IN");
-
-        transferAll(tokenOut, getBalance(tokenOut));
-        transferAll(tokenIn, getBalance(tokenIn));
-
+        if (isETH(tokenIn) && msg.value > totalAmountIn) {
+            transferAll(tokenIn, msg.value.sub(totalAmountIn));
+        }
     }
 
     function multihopBatchSwapExactIn(
@@ -421,43 +447,51 @@ contract ExchangeProxy is Ownable {
     returns (uint totalAmountOut)
     {
 
-        transferFromAll(tokenIn, totalAmountIn);
-
+        //transferFromAll(tokenIn, totalAmountIn);
+        uint totalSwapAmount = 0;
+        address from = msg.sender;
+        if (isETH(tokenIn)) {
+            require(msg.value >= totalAmountIn, "ERROR_ETH_IN");
+            weth.deposit.value(totalAmountIn)();
+            from = address(this);
+        }
         for (uint i = 0; i < swapSequences.length; i++) {
+            totalSwapAmount = totalSwapAmount.add(swapSequences[i][0].swapAmount);
+            require(swapSequences[i][0].tokenIn == address(tokenIn) || (isETH(tokenIn) && swapSequences[i][0].tokenIn == address(weth)), "ERR_TOKENIN_NOT_MATCH");
+            safeTransferFrom(swapSequences[i][0].tokenIn, from, swapSequences[i][0].pool, swapSequences[i][0].swapAmount);
+
             uint tokenAmountOut;
             for (uint k = 0; k < swapSequences[i].length; k++) {
                 Swap memory swap = swapSequences[i][k];
-                TokenInterface SwapTokenIn = TokenInterface(swap.tokenIn);
-                if (k == 1) {
-                    // Makes sure that on the second swap the output of the first was used
-                    // so there is not intermediate token leftover
-                    swap.swapAmount = tokenAmountOut;
-                }
-
                 PoolInterface pool = PoolInterface(swap.pool);
-                if (SwapTokenIn.allowance(address(this), swap.pool) > 0) {
-                    safeApprove(SwapTokenIn, swap.pool, 0);
+                address _to;
+                if (k < swapSequences[i].length - 1) {
+                    _to = swapSequences[i][k + 1].pool;
+                } else {
+                    require(swap.tokenOut == address(tokenOut) || (swap.tokenOut == address(weth) && isETH(tokenOut)), "ERR_OUTCOIN_NOT_MATCH");
+                    _to = (swap.tokenOut == address(weth) && isETH(tokenOut)) ? address(this) : msg.sender;
                 }
-                safeApprove(SwapTokenIn, swap.pool, swap.swapAmount);
-
                 (tokenAmountOut,) = pool.swapExactAmountIn(
                     msg.sender,
                     swap.tokenIn,
-                    swap.swapAmount,
                     swap.tokenOut,
                     swap.limitReturnAmount,
+                    _to,
                     swap.maxPrice
                 );
+                if (k == swapSequences[i].length - 1 && _to != msg.sender) {
+                    transferAll(tokenOut, tokenAmountOut);
+                }
             }
             // This takes the amountOut of the last swap
             totalAmountOut = tokenAmountOut.add(totalAmountOut);
         }
-
+        require(totalSwapAmount == totalAmountIn, "ERR_TOTAL_AMOUNT_IN");
         require(totalAmountOut >= minTotalAmountOut, "ERR_LIMIT_OUT");
-
-        transferAll(tokenOut, totalAmountOut);
-        transferAll(tokenIn, getBalance(tokenIn));
-
+        if (isETH(tokenIn) && msg.value > totalSwapAmount) {
+            (bool xfer,) = msg.sender.call.value(msg.value.sub(totalAmountIn))("");
+            require(xfer, "ERR_ETH_FAILED");
+        }
     }
 
     function multihopBatchSwapExactOut(
@@ -469,98 +503,56 @@ contract ExchangeProxy is Ownable {
     public payable
     returns (uint totalAmountIn)
     {
-
-        transferFromAll(tokenIn, maxTotalAmountIn);
-
-        for (uint i = 0; i < swapSequences.length; i++) {
-            uint tokenAmountInFirstSwap;
-            // Specific code for a simple swap and a multihop (2 swaps in sequence)
-            if (swapSequences[i].length == 1) {
-                Swap memory swap = swapSequences[i][0];
-                TokenInterface SwapTokenIn = TokenInterface(swap.tokenIn);
-
-                PoolInterface pool = PoolInterface(swap.pool);
-                if (SwapTokenIn.allowance(address(this), swap.pool) > 0) {
-                    safeApprove(SwapTokenIn, swap.pool, 0);
-                }
-                safeApprove(SwapTokenIn, swap.pool, swap.limitReturnAmount);
-
-                (tokenAmountInFirstSwap,) = pool.swapExactAmountOut(
-                    msg.sender,
-                    swap.tokenIn,
-                    swap.limitReturnAmount,
-                    swap.tokenOut,
-                    swap.swapAmount,
-                    swap.maxPrice
-                );
-                pool.gulp(swap.tokenIn);
-            } else {
-                // Consider we are swapping A -> B and B -> C. The goal is to buy a given amount
-                // of token C. But first we need to buy B with A so we can then buy C with B
-                // To get the exact amount of C we then first need to calculate how much B we'll need:
-                uint intermediateTokenAmount; // This would be token B as described above
-                Swap memory secondSwap = swapSequences[i][1];
-                PoolInterface poolSecondSwap = PoolInterface(secondSwap.pool);
-                intermediateTokenAmount = poolSecondSwap.calcInGivenOut(
-                    poolSecondSwap.getBalance(secondSwap.tokenIn),
-                    poolSecondSwap.getDenormalizedWeight(secondSwap.tokenIn),
-                    poolSecondSwap.getBalance(secondSwap.tokenOut),
-                    poolSecondSwap.getDenormalizedWeight(secondSwap.tokenOut),
-                    secondSwap.swapAmount,
-                    poolSecondSwap.getSwapFee()
-                );
-
-                //// Buy intermediateTokenAmount of token B with A in the first pool
-                Swap memory firstSwap = swapSequences[i][0];
-                TokenInterface FirstSwapTokenIn = TokenInterface(firstSwap.tokenIn);
-                PoolInterface poolFirstSwap = PoolInterface(firstSwap.pool);
-                if (FirstSwapTokenIn.allowance(address(this), firstSwap.pool) < uint(-1)) {
-                    safeApprove(FirstSwapTokenIn, firstSwap.pool, uint(-1));
-                }
-
-                (tokenAmountInFirstSwap,) = poolFirstSwap.swapExactAmountOut(
-                    msg.sender,
-                    firstSwap.tokenIn,
-                    firstSwap.limitReturnAmount,
-                    firstSwap.tokenOut,
-                    intermediateTokenAmount, // This is the amount of token B we need
-                    firstSwap.maxPrice
-                );
-                poolFirstSwap.gulp(firstSwap.tokenIn);
-
-                //// Buy the final amount of token C desired
-                TokenInterface SecondSwapTokenIn = TokenInterface(secondSwap.tokenIn);
-                if (SecondSwapTokenIn.allowance(address(this), secondSwap.pool) < uint(-1)) {
-                    safeApprove(SecondSwapTokenIn, secondSwap.pool, uint(-1));
-                }
-
-                poolSecondSwap.swapExactAmountOut(
-                    msg.sender,
-                    secondSwap.tokenIn,
-                    secondSwap.limitReturnAmount,
-                    secondSwap.tokenOut,
-                    secondSwap.swapAmount,
-                    secondSwap.maxPrice
-                );
-                poolSecondSwap.gulp(secondSwap.tokenIn);
-            }
-            totalAmountIn = tokenAmountInFirstSwap.add(totalAmountIn);
+        address from = msg.sender;
+        if (isETH(tokenIn)) {
+            require(msg.value >= maxTotalAmountIn, "ERROR_ETH_IN");
+            weth.deposit.value(msg.value)();
+            from = address(this);
         }
 
+        for (uint i = 0; i < swapSequences.length; i++) {
+            uint[] memory amountIns = getAmountsIn(swapSequences[i]);
+            swapSequences[i][0].tokenIn = isETH(tokenIn) ? address(weth) : swapSequences[i][0].tokenIn;
+            safeTransferFrom(swapSequences[i][0].tokenIn, from, swapSequences[i][0].pool, amountIns[0]);
+
+            for (uint j = 0; j < swapSequences[i].length; j++) {
+                Swap memory swap = swapSequences[i][j];
+                PoolInterface pool = PoolInterface(swap.pool);
+                address _to;
+                if (j < swapSequences[i].length - 1) {
+                    _to = swapSequences[i][j + 1].pool;
+                } else {
+                    require(swap.tokenOut == address(tokenOut) || (swap.tokenOut == address(weth) && isETH(tokenOut)), "ERR_OUTCOIN_NOT_MATCH");
+                    _to = (swap.tokenOut == address(weth) && isETH(tokenOut)) ? address(this) : msg.sender;
+                }
+                uint _tokenOut = j < swapSequences[i].length - 1 ? amountIns[j + 1] : swap.swapAmount;
+                pool.swapExactAmountOut(
+                    msg.sender,
+                    swap.tokenIn,
+                    amountIns[j],
+                    swap.tokenOut,
+                    _tokenOut,
+                    _to,
+                    swap.maxPrice
+                );
+                if (j == swapSequences[i].length - 1 && _to != msg.sender) {
+                    transferAll(tokenOut, _tokenOut);
+                }
+            }
+            totalAmountIn = totalAmountIn.add(amountIns[0]);
+        }
         require(totalAmountIn <= maxTotalAmountIn, "ERR_LIMIT_IN");
-
-        transferAll(tokenOut, getBalance(tokenOut));
-        transferAll(tokenIn, getBalance(tokenIn));
-
+        if (isETH(tokenIn) && msg.value > totalAmountIn) {
+            transferAll(tokenIn, msg.value.sub(totalAmountIn));
+        }
     }
 
 
-    function transferFromAll(TokenInterface token, uint amount) internal returns(bool) {
+    function transferFromAll(TokenInterface token, uint amount) internal returns (bool) {
         if (isETH(token)) {
             weth.deposit.value(msg.value)();
         } else {
-            //            require(token.transferFrom(msg.sender, address(this), amount), "ERR_TRANSFER_FAILED");
-            safeTransferFrom(token, msg.sender, address(this), amount);
+            safeTransferFrom(address(token), msg.sender, address(this), amount);
         }
     }
 
@@ -572,7 +564,7 @@ contract ExchangeProxy is Ownable {
         }
     }
 
-    function transferAll(TokenInterface token, uint amount) internal returns(bool) {
+    function transferAll(TokenInterface token, uint amount) internal returns (bool) {
         if (amount == 0) {
             return true;
         }
@@ -582,62 +574,88 @@ contract ExchangeProxy is Ownable {
             (bool xfer,) = msg.sender.call.value(amount)("");
             require(xfer, "ERR_ETH_FAILED");
         } else {
-            //            require(token.transfer(msg.sender, amount), "ERR_TRANSFER_FAILED");
-            safeTransfer(token, msg.sender, amount);
+            safeTransfer(address(token), msg.sender, amount);
         }
     }
 
-    function isETH(TokenInterface token) internal pure returns(bool) {
+    function isETH(TokenInterface token) internal pure returns (bool) {
         return (address(token) == ETH_ADDRESS);
     }
 
-    function safeTransfer(TokenInterface token, address to , uint256 amount) internal {
-        bytes memory data = abi.encodeWithSelector(token.transfer.selector, to, amount);
-        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
-        if (returndata.length > 0) {
-            require(abi.decode(returndata, (bool)), "not succeed");
-        }
+    function safeApprove(
+        address token,
+        address to,
+        uint256 value
+    ) internal {
+        // bytes4(keccak256(bytes('approve(address,uint256)')));
+        (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0x095ea7b3, to, value));
+        require(
+            success && (data.length == 0 || abi.decode(data, (bool))),
+            'TransferHelper::safeApprove: approve failed'
+        );
     }
 
-    function safeTransferFrom(TokenInterface token, address from, address to , uint256 amount) internal {
-        bytes memory data = abi.encodeWithSelector(token.transferFrom.selector, from, to, amount);
-        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
-        if (returndata.length > 0) {
-            require(abi.decode(returndata, (bool)), "not succeed");
-        }
+    function safeTransfer(
+        address token,
+        address to,
+        uint256 value
+    ) internal {
+        // bytes4(keccak256(bytes('transfer(address,uint256)')));
+        (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0xa9059cbb, to, value));
+        require(
+            success && (data.length == 0 || abi.decode(data, (bool))),
+            'TransferHelper::safeTransfer: transfer failed'
+        );
     }
 
-    function safeApprove(TokenInterface token, address to , uint256 amount) internal {
-        bytes memory data = abi.encodeWithSelector(token.approve.selector, to, amount);
-        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
-        if (returndata.length > 0) {
-            require(abi.decode(returndata, (bool)), "not succeed");
-        }
+    function safeTransferFrom(
+        address token,
+        address from,
+        address to,
+        uint256 value
+    ) internal {
+        // bytes4(keccak256(bytes('transferFrom(address,address,uint256)')));
+        (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0x23b872dd, from, to, value));
+        require(
+            success && (data.length == 0 || abi.decode(data, (bool))),
+            'TransferHelper::transferFrom: transferFrom failed'
+        );
     }
 
-    function functionCall(address target, bytes memory data, string memory errorMessage) internal returns (bytes memory) {
-        return _functionCallWithValue(target, data, errorMessage);
+    // given an output amount of an asset and pool, returns a required input amount of the other asset
+    function getAmountIn(Swap memory swap) internal view returns (uint amountIn) {
+        require(swap.swapAmount > 0, 'ExchangeProxy: INSUFFICIENT_OUTPUT_AMOUNT');
+        PoolInterface pool = PoolInterface(swap.pool);
+        amountIn = pool.calcDesireByGivenAmount(
+            swap.tokenIn,
+            swap.tokenOut,
+            0,
+            swap.swapAmount
+        );
+        uint256 spotPriceAfter = pool.calcPoolSpotPrice(
+            swap.tokenIn,
+            swap.tokenOut,
+            0,
+            0
+        );
+        require(spotPriceAfter <= swap.maxPrice, "ERR_LIMIT_PRICE");
     }
 
-    function _functionCallWithValue(address target, bytes memory data, string memory errorMessage) internal returns (bytes memory) {
-        (bool success, bytes memory returndata) = target.call(data);// value: weiValue }(data);
-        if (success) {
-            return returndata;
-        } else {
-            // Look for revert reason and bubble it up if present
-            if (returndata.length > 0) {
-                // The easiest way to bubble the revert reason is using memory via assembly
-
-                // solhint-disable-next-line no-inline-assembly
-                assembly {
-                    let returndata_size := mload(returndata)
-                    revert(add(32, returndata), returndata_size)
-                }
-            } else {
-                revert(errorMessage);
-            }
+    // performs chained getAmountIn calculations on any number of pools
+    function getAmountsIn(Swap[] memory swaps) internal view returns (uint[] memory amounts) {
+        require(swaps.length >= 1, 'ExchangeProxy: INVALID_PATH');
+        amounts = new uint[](swaps.length);
+        uint i = swaps.length - 1;
+        while (i > 0) {
+            Swap memory swap = swaps[i];
+            amounts[i] = getAmountIn(swap);
+            require(swaps[i].tokenIn == swaps[i - 1].tokenOut, "ExchangeProxy: INVALID_PATH");
+            swaps[i - 1].swapAmount = amounts[i];
+            i--;
         }
+        amounts[0] = getAmountIn(swaps[0]);
     }
 
     function() external payable {}
+
 }

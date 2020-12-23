@@ -22,6 +22,7 @@ interface IERC20 {
 }
 
 interface IMPool {
+    function totalSupply() external view returns (uint);
     function isBound(address t) external view returns (bool);
     function getFinalTokens() external view returns(address[] memory);
     function getBalance(address token) external view returns (uint);
@@ -31,8 +32,17 @@ interface IMPool {
     function bind(address token, uint balance, uint denorm) external;
     function finalize(address beneficiary, uint256 initAmount) external;
     function updatePairGPInfo(address[] calldata gps, uint[] calldata shares) external;
-    function joinPool(address beneficiary, uint poolAmountOut, uint[] calldata maxAmountsIn) external;
-    function joinswapExternAmountIn(address beneficiary, address tokenIn, uint tokenAmountIn, uint minPoolAmountOut) external returns (uint poolAmountOut);
+    function joinPool(address beneficiary, uint poolAmountOut) external;
+}
+
+interface TokenInterface {
+    function balanceOf(address) external view returns (uint);
+    function allowance(address, address) external view returns (uint);
+    function approve(address, uint) external returns (bool);
+    function transfer(address, uint) external returns (bool);
+    function transferFrom(address, address, uint) external returns (bool);
+    function deposit() external payable;
+    function withdraw(uint) external;
 }
 
 interface IPairToken {
@@ -69,13 +79,13 @@ contract MActions {
         uint[] calldata shares,
         uint swapFee,
         uint gpRate
-    ) external returns (IMPool pool) {
+    ) external payable returns (IMPool pool) {
         pool = create(factory, tokens, balances, denorms, swapFee, 0, false);
 
         IPairToken pair = pairFactory.newPair(address(pool), 4 * 10 ** 18, gpRate);
 
         pool.setPair(address(pair));
-        if (gpRate > 0 && gps.length != 0 && gps.length == shares.length) {
+        if (gpRate > 0 && gpRate <= 15 && gps.length != 0 && gps.length == shares.length) {
             pool.updatePairGPInfo(gps, shares);
         }
         pool.finalize(msg.sender, 0);
@@ -91,7 +101,7 @@ contract MActions {
         uint swapFee,
         uint initLpSupply,
         bool finalize
-    ) public returns (IMPool pool) {
+    ) public payable returns (IMPool pool) {
         require(tokens.length == balances.length, "ERR_LENGTH_MISMATCH");
         require(tokens.length == denorms.length, "ERR_LENGTH_MISMATCH");
 
@@ -99,13 +109,21 @@ contract MActions {
         pool.setSwapFee(swapFee);
 
         for (uint i = 0; i < tokens.length; i++) {
-            IERC20 token = IERC20(tokens[i]);
-            safeTransferFrom(token, msg.sender, address(this), balances[i]);
-            if (token.allowance(address(this), address(pool)) > 0) {
-                safeApprove(token, address(pool), 0);
+            address inToken = tokens[i];
+            if (inToken == address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE)) {
+                TokenInterface weth = TokenInterface(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
+                require(msg.value == balances[i], "ERR_LIMIT_IN");
+                weth.deposit.value(msg.value)();
+                inToken = address(weth);
+            } else {
+                safeTransferFrom(inToken, msg.sender, address(this), balances[i]);
             }
-            safeApprove(token, address(pool), balances[i]);
-            pool.bind(tokens[i], balances[i], denorms[i]);
+            IERC20 token = IERC20(inToken);
+            if (token.allowance(address(this), address(pool)) > 0) {
+                safeApprove(inToken, address(pool), 0);
+            }
+            safeApprove(inToken, address(pool), balances[i]);
+            pool.bind(inToken, balances[i], denorms[i]);
         }
         if (finalize) {
             pool.finalize(msg.sender, initLpSupply);
@@ -118,88 +136,132 @@ contract MActions {
         IMPool pool,
         uint poolAmountOut,
         uint[] calldata maxAmountsIn
-    ) external {
+    ) external payable {
         address[] memory tokens = pool.getFinalTokens();
         require(maxAmountsIn.length == tokens.length, "ERR_LENGTH_MISMATCH");
+        uint poolTotal = pool.totalSupply();
+        uint ratio = bdiv(poolAmountOut, poolTotal);
+        require(ratio != 0, "ERR_MATH_APPROX");
 
         for (uint i = 0; i < tokens.length; i++) {
-            IERC20 token = IERC20(tokens[i]);
-            safeTransferFrom(token, msg.sender, address(this), maxAmountsIn[i]);
-            if (token.allowance(address(this), address(pool)) > 0) {
-                safeApprove(token, address(pool), 0);
-            }
-            safeApprove(token, address(pool), maxAmountsIn[i]);
-        }
-
-        pool.joinPool(msg.sender, poolAmountOut, maxAmountsIn);
-        for (uint i = 0; i < tokens.length; i++) {
-            IERC20 token = IERC20(tokens[i]);
-            if (token.balanceOf(address(this)) > 0) {
-                safeTransfer(token, msg.sender, token.balanceOf(address(this)));
-            }
-        }
-    }
-
-    function joinswapExternAmountIn(
-        IMPool pool,
-        address tokenIn,
-        uint tokenAmountIn,
-        uint minPoolAmountOut
-    ) external {
-        IERC20 token = IERC20(tokenIn);
-        safeTransferFrom(token, msg.sender, address(this), tokenAmountIn);
-        if (token.allowance(address(this), address(pool)) > 0) {
-            safeApprove(token, address(pool), 0);
-        }
-        safeApprove(token, address(pool), tokenAmountIn);
-        pool.joinswapExternAmountIn(msg.sender, tokenIn, tokenAmountIn, minPoolAmountOut);
-    }
-
-    function safeTransfer(IERC20 token, address to , uint256 amount) internal {
-        bytes memory data = abi.encodeWithSelector(token.transfer.selector, to, amount);
-        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
-        if (returndata.length > 0) {
-            require(abi.decode(returndata, (bool)), "not succeed");
-        }
-    }
-
-    function safeTransferFrom(IERC20 token, address from, address to , uint256 amount) internal {
-        bytes memory data = abi.encodeWithSelector(token.transferFrom.selector, from, to, amount);
-        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
-        if (returndata.length > 0) {
-            require(abi.decode(returndata, (bool)), "not succeed");
-        }
-    }
-
-    function safeApprove(IERC20 token, address to , uint256 amount) internal {
-        bytes memory data = abi.encodeWithSelector(token.approve.selector, to, amount);
-        bytes memory returndata = functionCall(address(token), data, "low-level call failed");
-        if (returndata.length > 0) {
-            require(abi.decode(returndata, (bool)), "not succeed");
-        }
-    }
-
-    function functionCall(address target, bytes memory data, string memory errorMessage) internal returns (bytes memory) {
-        return _functionCallWithValue(target, data, errorMessage);
-    }
-
-    function _functionCallWithValue(address target, bytes memory data, string memory errorMessage) internal returns (bytes memory) {
-        (bool success, bytes memory returndata) = target.call(data);// value: weiValue }(data);
-        if (success) {
-            return returndata;
-        } else {
-            // Look for revert reason and bubble it up if present
-            if (returndata.length > 0) {
-                // The easiest way to bubble the revert reason is using memory via assembly
-
-                // solhint-disable-next-line no-inline-assembly
-                assembly {
-                    let returndata_size := mload(returndata)
-                    revert(add(32, returndata), returndata_size)
+            address t = tokens[i];
+            uint bal = pool.getBalance(t);
+            uint tokenAmountIn = bmul(ratio, bal);
+            require(tokenAmountIn != 0, "ERR_MATH_APPROX");
+            require(tokenAmountIn <= maxAmountsIn[i], "ERR_LIMIT_IN");
+            address from = msg.sender;
+            address _weth = address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
+            if (msg.value > 0 && t == _weth) {
+                require(msg.value <= maxAmountsIn[i], "ERR_ETH_IN");
+                TokenInterface weth = TokenInterface(_weth);
+                weth.deposit.value(tokenAmountIn)();
+                t = address(weth);
+                from = address(this);
+                if (msg.value > tokenAmountIn) {
+                    safeTransferETH(msg.sender, bsub(msg.value, tokenAmountIn));
                 }
-            } else {
-                revert(errorMessage);
             }
+            safeTransferFrom(t, from, address(pool), tokenAmountIn);
+        }
+        pool.joinPool(msg.sender, poolAmountOut);
+    }
+
+    function safeApprove(
+        address token,
+        address to,
+        uint256 value
+    ) internal {
+        // bytes4(keccak256(bytes('approve(address,uint256)')));
+        (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0x095ea7b3, to, value));
+        require(
+            success && (data.length == 0 || abi.decode(data, (bool))),
+            'TransferHelper::safeApprove: approve failed'
+        );
+    }
+
+    function safeTransfer(
+        address token,
+        address to,
+        uint256 value
+    ) internal {
+        // bytes4(keccak256(bytes('transfer(address,uint256)')));
+        (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0xa9059cbb, to, value));
+        require(
+            success && (data.length == 0 || abi.decode(data, (bool))),
+            'TransferHelper::safeTransfer: transfer failed'
+        );
+    }
+
+    function safeTransferFrom(
+        address token,
+        address from,
+        address to,
+        uint256 value
+    ) internal {
+        // bytes4(keccak256(bytes('transferFrom(address,address,uint256)')));
+        (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0x23b872dd, from, to, value));
+        require(
+            success && (data.length == 0 || abi.decode(data, (bool))),
+            'TransferHelper::transferFrom: transferFrom failed'
+        );
+    }
+
+    function safeTransferETH(
+        address to,
+        uint256 value
+    ) internal {
+        (bool success, ) = to.call.value(value)("");
+        require(success, 'TransferHelper::safeTransferETH: ETH transfer failed');
+    }
+
+    function setController(IMPool pool, address newController) external {
+        pool.setController(newController);
+    }
+
+
+    function bdiv(uint a, uint b)
+    internal pure
+    returns (uint)
+    {
+        require(b != 0, "ERR_DIV_ZERO");
+        uint c0 = a * 10 ** 18;
+        require(a == 0 || c0 / a == 1 * 10 ** 18, "ERR_DIV_INTERNAL"); // bmul overflow
+        uint c1 = c0 + (b / 2);
+        require(c1 >= c0, "ERR_DIV_INTERNAL"); //  badd require
+        uint c2 = c1 / b;
+        return c2;
+    }
+
+    function bmul(uint a, uint b)
+    internal pure
+    returns (uint)
+    {
+        uint c0 = a * b;
+        require(a == 0 || c0 / a == b, "ERR_MUL_OVERFLOW");
+        uint c1 = c0 + (1 * 10 ** 18) / 2;
+        require(c1 >= c0, "ERR_MUL_OVERFLOW");
+        uint c2 = c1 / (1 * 10 ** 18);
+        return c2;
+    }
+
+    function bsub(uint a, uint b)
+    internal pure
+    returns (uint)
+    {
+        (uint c, bool flag) = bsubSign(a, b);
+        require(!flag, "ERR_SUB_UNDERFLOW");
+        return c;
+    }
+
+    function bsubSign(uint a, uint b)
+    internal pure
+    returns (uint, bool)
+    {
+        if (a >= b) {
+            return (a - b, false);
+        } else {
+            return (b - a, true);
         }
     }
+
 }

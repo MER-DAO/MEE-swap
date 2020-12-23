@@ -10,8 +10,8 @@ contract PairToken is PairERC20 {
 
     // Info of each user.
     struct UserInfo {
-        uint256 amount;           // How many LP tokens or gp amount the user has provided.
-        uint256 rewardDebt;       // Reward debt. See explanation below.
+        uint256 amount;           // How many LP tokens or gp shares the user has provided.
+        uint256 rewardDebt;       // Reward debt.
     }
     // Controller.
     address private _controller;
@@ -35,6 +35,8 @@ contract PairToken is PairERC20 {
     uint256 public _poolLastRewardBlock;
     uint256 public _poolAccPairPerShare;
     uint256 public _poolAccPairGpPerShare;
+
+    uint256 private _base = 1e22;
 
     event Deposit(bool isGp, address indexed user, uint256 amount);
     event Withdraw(bool isGp, address indexed user, uint256 amount);
@@ -67,35 +69,35 @@ contract PairToken is PairERC20 {
         UserInfo storage user = gpReward ? gpInfoList[_user] : lpInfoList[_user];
 
         if (user.amount == 0) {return 0;}
+
         uint256 rate = gpReward ? _gpRate : 100 - _gpRate;
         uint256 accPerShare = gpReward ? _poolAccPairGpPerShare : _poolAccPairPerShare ;
         uint256 lpSupply = gpReward? _totalGpSupply : _totalLpSupply;
 
         if (block.number > _poolLastRewardBlock && lpSupply != 0) {
-            uint256 blockNum = block.number.sub(_poolLastRewardBlock);
+            uint256 blockNum;
+            if (block.number >= _endBlock){
+                blockNum = _endBlock.sub(_poolLastRewardBlock);
+            } else {
+                blockNum = block.number.sub(_poolLastRewardBlock);
+            }
             uint256 pairReward = blockNum.mul(_pairPerBlock);
             if (_gpRate > 0) {
                 pairReward = pairReward.mul(rate).div(100);
             }
-            accPerShare = accPerShare.add(pairReward.mul(1e12).div(lpSupply));
+            accPerShare = accPerShare.add(pairReward.mul(_base).div(lpSupply));
         }
-        return user.amount.mul(accPerShare).div(1e12).sub(user.rewardDebt);
+        return user.amount.mul(accPerShare).div(_base).sub(user.rewardDebt);
     }
 
     // Update reward variables of the given user to be up-to-date.
     function updatePool() public {
-        if (block.number <= _poolLastRewardBlock) {return;}
+        if (block.number <= _poolLastRewardBlock || _poolLastRewardBlock == _endBlock) {return;}
 
-        if (_totalLpSupply == 0) {
+        if (_totalLpSupply == 0 || (_gpRate > 0 && _totalGpSupply == 0) ) {
             _poolLastRewardBlock = block.number;
             return;
         }
-        if (_gpRate > 0 && _totalGpSupply == 0){
-            _poolLastRewardBlock = block.number;
-            return;
-        }
-
-        if (_poolLastRewardBlock == _endBlock) {return;}
 
         uint256 blockNum;
         if (block.number < _endBlock) {
@@ -115,10 +117,10 @@ contract PairToken is PairERC20 {
             lpPairReward = pairReward;
         } else {
             uint256 gpReward = pairReward.mul(_gpRate).div(100);
-            _poolAccPairGpPerShare = _poolAccPairGpPerShare.add(gpReward.mul(1e12).div(_totalGpSupply));
+            _poolAccPairGpPerShare = _poolAccPairGpPerShare.add(gpReward.mul(_base).div(_totalGpSupply));
             lpPairReward = pairReward.sub(gpReward);
         }
-        _poolAccPairPerShare = _poolAccPairPerShare.add(lpPairReward.mul(1e12).div(_totalLpSupply));
+        _poolAccPairPerShare = _poolAccPairPerShare.add(lpPairReward.mul(_base).div(_totalLpSupply));
     }
 
     function claimPair(bool isGp, address _user) external {
@@ -130,12 +132,12 @@ contract PairToken is PairERC20 {
 
         uint256 accPerShare = isGp ? _poolAccPairGpPerShare: _poolAccPairPerShare ;
         if (user.amount > 0) {
-            uint256 pending = user.amount.mul(accPerShare).div(1e12).sub(user.rewardDebt);
+            uint256 pending = user.amount.mul(accPerShare).div(_base).sub(user.rewardDebt);
             if (pending > 0) {
                 _move(address(this), _user, pending);
             }
         }
-        user.rewardDebt = user.amount.mul(accPerShare).div(1e12);
+        user.rewardDebt = user.amount.mul(accPerShare).div(_base);
         return;
     }
 
@@ -153,7 +155,7 @@ contract PairToken is PairERC20 {
 
         uint256 accPerShare = isGp ? _poolAccPairGpPerShare: _poolAccPairPerShare ;
         if (user.amount > 0) {
-            uint256 pending = user.amount.mul(accPerShare).div(1e12).sub(user.rewardDebt);
+            uint256 pending = user.amount.mul(accPerShare).div(_base).sub(user.rewardDebt);
             if (pending > 0) {
                 _move(address(this), _user, pending);
             }
@@ -164,7 +166,7 @@ contract PairToken is PairERC20 {
             isGp ? _totalGpSupply += _amount : _totalLpSupply += _amount;
             emit Deposit(isGp, _user, _amount);
         }
-        user.rewardDebt = user.amount.mul(accPerShare).div(1e12);
+        user.rewardDebt = user.amount.mul(accPerShare).div(_base);
     }
 
     function removeLiquidity(bool isGp, address _user, uint256 _amount) external {
@@ -180,7 +182,7 @@ contract PairToken is PairERC20 {
 
         uint256 accPerShare = isGp ? _poolAccPairGpPerShare : _poolAccPairPerShare;
 
-        uint256 pending = user.amount.mul(accPerShare).div(1e12).sub(user.rewardDebt);
+        uint256 pending = user.amount.mul(accPerShare).div(_base).sub(user.rewardDebt);
         if (pending > 0) {
             _move(address(this), _user, pending);
         }
@@ -189,7 +191,7 @@ contract PairToken is PairERC20 {
             isGp ? _totalGpSupply -= _amount : _totalLpSupply -= _amount;
             emit Withdraw(isGp, _user, _amount);
         }
-        user.rewardDebt = user.amount.mul(accPerShare).div(1e12);
+        user.rewardDebt = user.amount.mul(accPerShare).div(_base);
     }
 
     function updateGPInfo(address[] calldata gps, uint256[] calldata amounts) external {

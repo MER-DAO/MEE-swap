@@ -93,4 +93,5 @@ contract MFactory is MBronze {
         _lpMining = lpMining;
         _swapMining = swapMining;
     }
+
 }
