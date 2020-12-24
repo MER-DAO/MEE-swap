@@ -594,8 +594,9 @@ contract MPool is MBronze, MToken, MMath {
         Record memory inRecord = _records[address(tokenIn)];
         Record memory outRecord = _records[address(tokenOut)];
         if (inAmount != 0 && outAmount != 0) {
+            uint256 factoryFee = bmul(inAmount, bmul(bdiv(_swapFee, 6), 1));
             price = calcSpotPrice(
-                badd(inRecord.balance, inAmount),
+                badd(inRecord.balance, bsub(inAmount, factoryFee)),
                 inRecord.denorm,
                 bsub(outRecord.balance, outAmount),
                 outRecord.denorm,

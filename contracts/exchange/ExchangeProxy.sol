@@ -632,13 +632,13 @@ contract ExchangeProxy is Ownable {
             0,
             swap.swapAmount
         );
-        uint256 spotPriceAfter = pool.calcPoolSpotPrice(
+        uint256 spotPrice = pool.calcPoolSpotPrice(
             swap.tokenIn,
             swap.tokenOut,
             0,
             0
         );
-        require(spotPriceAfter <= swap.maxPrice, "ERR_LIMIT_PRICE");
+        require(spotPrice <= swap.maxPrice, "ERR_LIMIT_PRICE");
     }
 
     // performs chained getAmountIn calculations on any number of pools
