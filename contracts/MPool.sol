@@ -248,7 +248,7 @@ contract MPool is MBronze, MToken, MMath {
     _lock_
     {
         require(msg.sender == controller, "ERR_NOT_CONTROLLER");
-        require(!_finalized, "ERR_IS_FINALIZED");
+        require(!_finalized || totalSupply() == 0, "ERR_IS_FINALIZED");
         require(_tokens.length >= MIN_BOUND_TOKENS, "ERR_MIN_TOKENS");
 
         _finalized = true;
@@ -291,7 +291,7 @@ contract MPool is MBronze, MToken, MMath {
 
         require(msg.sender == controller, "ERR_NOT_CONTROLLER");
         require(_records[token].bound, "ERR_NOT_BOUND");
-        require(!_finalized, "ERR_IS_FINALIZED");
+        require(!_finalized || totalSupply() == 0, "ERR_IS_FINALIZED");
 
         require(denorm >= MIN_WEIGHT, "ERR_MIN_WEIGHT");
         require(denorm <= MAX_WEIGHT, "ERR_MAX_WEIGHT");

@@ -22,10 +22,12 @@ interface IERC20 {
 }
 
 interface IMPool {
+    function controller() external returns (address);
     function totalSupply() external view returns (uint);
     function isBound(address t) external view returns (bool);
     function getFinalTokens() external view returns(address[] memory);
     function getBalance(address token) external view returns (uint);
+    function getDenormalizedWeight(address token) external view returns (uint);
     function setSwapFee(uint swapFee) external;
     function setController(address controller) external;
     function setPair(address pair) external;
@@ -33,6 +35,7 @@ interface IMPool {
     function finalize(address beneficiary, uint256 initAmount) external;
     function updatePairGPInfo(address[] calldata gps, uint[] calldata shares) external;
     function joinPool(address beneficiary, uint poolAmountOut) external;
+    function rebind(address token, uint balance, uint denorm) external;
 }
 
 interface TokenInterface {
@@ -108,13 +111,15 @@ contract MActions {
         pool = factory.newMPool();
         pool.setSwapFee(swapFee);
 
+        address ETH = address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE);
+        address weth = address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
+
         for (uint i = 0; i < tokens.length; i++) {
             address inToken = tokens[i];
-            if (inToken == address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE)) {
-                TokenInterface weth = TokenInterface(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
+            if (inToken == ETH) {
                 require(msg.value == balances[i], "ERR_LIMIT_IN");
-                weth.deposit.value(msg.value)();
-                inToken = address(weth);
+                TokenInterface(weth).deposit.value(msg.value)();
+                inToken = weth;
             } else {
                 safeTransferFrom(inToken, msg.sender, address(this), balances[i]);
             }
@@ -142,6 +147,7 @@ contract MActions {
         uint poolTotal = pool.totalSupply();
         uint ratio = bdiv(poolAmountOut, poolTotal);
         require(ratio != 0, "ERR_MATH_APPROX");
+        address _weth = address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
 
         for (uint i = 0; i < tokens.length; i++) {
             address t = tokens[i];
@@ -150,7 +156,6 @@ contract MActions {
             require(tokenAmountIn != 0, "ERR_MATH_APPROX");
             require(tokenAmountIn <= maxAmountsIn[i], "ERR_LIMIT_IN");
             address from = msg.sender;
-            address _weth = address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
             if (msg.value > 0 && t == _weth) {
                 require(msg.value <= maxAmountsIn[i], "ERR_ETH_IN");
                 TokenInterface weth = TokenInterface(_weth);
@@ -164,6 +169,46 @@ contract MActions {
             safeTransferFrom(t, from, address(pool), tokenAmountIn);
         }
         pool.joinPool(msg.sender, poolAmountOut);
+    }
+
+    function rebind(
+        IMPool pool,
+        uint[] memory balances,
+        uint initLpSupply
+    ) public payable {
+        require(address(pool) != address(0), "ERR_POOL_INVALID");
+        address[] memory tokens = pool.getFinalTokens();
+        require(tokens.length == balances.length, "ERR_LENGTH_MISMATCH");
+        TokenInterface weth = TokenInterface(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
+        bool costETH = false;
+        for (uint i = 0; i < tokens.length; i++) {
+            address inToken = tokens[i];
+            if (inToken == address(weth) && msg.value > 0) {
+                require(msg.value == balances[i], "ERR_LIMIT_IN");
+                weth.deposit.value(msg.value)();
+                costETH = true;
+            } else {
+                safeTransferFrom(inToken, msg.sender, address(this), balances[i]);
+            }
+            IERC20 token = IERC20(inToken);
+            if (token.allowance(address(this), address(pool)) > 0) {
+                safeApprove(inToken, address(pool), 0);
+            }
+            safeApprove(inToken, address(pool), balances[i]);
+            pool.rebind(inToken, balances[i], pool.getDenormalizedWeight(inToken));
+        }
+        if(msg.value > 0 && !costETH){
+            safeTransferETH(msg.sender, msg.value);
+        }
+        pool.finalize(msg.sender, initLpSupply);
+        pool.setController(msg.sender);
+    }
+
+    // when sender transfer controller to dproxy, dproxy could transfer controller back to msg.sender;
+    // note: mustn't transfer pool's controller to MActions.
+    function transferController(IMPool pool) external {
+        require(pool.controller() == address(this), "ERR_POOL_CONTROOLER");
+        pool.setController(msg.sender);
     }
 
     function safeApprove(
