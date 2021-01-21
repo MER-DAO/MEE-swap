@@ -146,7 +146,7 @@ contract MMath is MBronze, MConst, MNum {
     /**********************************************************************************************
     // calcSingleOutGivenPoolIn                                                                  //
     // tAo = tokenAmountOut            /      /                                             \\   //
-    // bO = tokenBalanceOut           /      // pS - (pAi * (1 - eF)) \     /    1    \      \\  //
+    // bO = tokenBalanceOut           /      //        pS - pAi       \     /    1    \      \\  //
     // pAi = poolAmountIn            | bO - || ----------------------- | ^ | --------- | * b0 || //
     // ps = poolSupply                \      \\          pS           /     \(wO / tW)/      //  //
     // wI = tokenWeightIn      tAo =   \      \                                             //   //
