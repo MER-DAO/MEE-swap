@@ -446,8 +446,6 @@ contract ExchangeProxy is Ownable {
     public payable
     returns (uint totalAmountOut)
     {
-
-        //transferFromAll(tokenIn, totalAmountIn);
         uint totalSwapAmount = 0;
         address from = msg.sender;
         if (isETH(tokenIn)) {
@@ -547,15 +545,6 @@ contract ExchangeProxy is Ownable {
         }
     }
 
-
-    function transferFromAll(TokenInterface token, uint amount) internal returns (bool) {
-        if (isETH(token)) {
-            weth.deposit.value(msg.value)();
-        } else {
-            safeTransferFrom(address(token), msg.sender, address(this), amount);
-        }
-    }
-
     function getBalance(TokenInterface token) internal view returns (uint) {
         if (isETH(token)) {
             return weth.balanceOf(address(this));
@@ -564,9 +553,9 @@ contract ExchangeProxy is Ownable {
         }
     }
 
-    function transferAll(TokenInterface token, uint amount) internal returns (bool) {
+    function transferAll(TokenInterface token, uint amount) internal{
         if (amount == 0) {
-            return true;
+            return;
         }
 
         if (isETH(token)) {
